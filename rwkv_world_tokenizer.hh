@@ -9,19 +9,23 @@
 #ifndef RWKV_WORLD_TOKENIZER_H_
 #define RWKV_WORLD_TOKENIZER_H_
 
-//#include <exception>
+#if defined(RWKV_ENABLE_EXCEPTION)
+#include <exception>
+#include <stdexcept>
+#endif
 #include <sstream>
-//#include <stdexcept>
 #include <string>
 
 #define STRINGIFY(...) STRINGIFY_(__VA_ARGS__)
 #define STRINGIFY_(...) #__VA_ARGS__
+
+#if defined(RWKV_ENABLE_EXCEPTION)
+
 #define RV_CHECK(...)                                                         \
   for (bool _rv_check_status = (__VA_ARGS__); !_rv_check_status;)             \
-  _err_ss << ("Check \"" STRINGIFY(__VA_ARGS__) "\" failed at " + \
+  FRException() << ("Check \"" STRINGIFY(__VA_ARGS__) "\" failed at " + \
                           std::to_string(__LINE__) + " in " __FILE__ "\n  > Error msg: ")
 
-#if 0
 struct FRException : public std::runtime_error {
   FRException() : std::runtime_error("") {}
   const char* what() const noexcept override { return msg.c_str(); }
@@ -34,6 +38,13 @@ struct FRException : public std::runtime_error {
   }
   std::string msg;
 };
+#else
+
+#define RV_CHECK(...)                                                         \
+  for (bool _rv_check_status = (__VA_ARGS__); !_rv_check_status;)             \
+  _err_ss << ("Check \"" STRINGIFY(__VA_ARGS__) "\" failed at " + \
+                          std::to_string(__LINE__) + " in " __FILE__ "\n  > Error msg: ")
 #endif
+
 
 #endif  // RWKV_WORLD_TOKENIZER_H_

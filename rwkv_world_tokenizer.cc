@@ -42,14 +42,14 @@ struct TrieTree {
         break;
       }
       node = it->second.get();
-      //RV_CHECK(node != nullptr);
+      RV_CHECK(node != nullptr);
       if (node->token_id.has_value()) {
         prefix = node->word;
         token_id = node->token_id.value();
       }
     }
-    //RV_CHECK(!prefix.empty());
-    //RV_CHECK(token_id != -1);
+    RV_CHECK(!prefix.empty());
+    RV_CHECK(token_id != -1);
     return {prefix, token_id};
   }
 
@@ -73,7 +73,8 @@ struct TrieTree {
 
 class RWKVWorldTokenizer {
  public:
-  explicit RWKVWorldTokenizer(const std::string& path) {
+  explicit RWKVWorldTokenizer(const std::unordered_map<int, std::string>& idx2word) {
+#if 0
     std::ifstream infile;
     infile.open(path, std::ios::binary | std::ios::in);
     infile.seekg(0, std::ios::end);
@@ -83,11 +84,15 @@ class RWKVWorldTokenizer {
     infile.read(data, length);
     infile.close();
 
-#if 0
     auto unpacker = msgpack::unpack(data, length);
     auto obj = unpacker.get();
     delete[] data;
     _idx2word = obj.as<std::unordered_map<int, std::string>>();
+    for (auto& pair : _idx2word) {
+      _word2idx[pair.second] = pair.first;
+    }
+#else
+    _idx2word = idx2word;
     for (auto& pair : _idx2word) {
       _word2idx[pair.second] = pair.first;
     }
@@ -117,12 +122,12 @@ class RWKVWorldTokenizer {
 
   size_t GetVocabSize() {
     auto size = _idx2word.size();
-    //RV_CHECK(size > 0);
+    RV_CHECK(size > 0);
     return size;
   }
 
   virtual std::string IdToToken(int32_t token_id) {
-    //RV_CHECK(_idx2word.size() > 0);
+    RV_CHECK(_idx2word.size() > 0);
     auto it = _idx2word.find(token_id);
     if (it == _idx2word.end()) {
       return "<unk>";
@@ -132,7 +137,7 @@ class RWKVWorldTokenizer {
   }
 
   int32_t TokenToId(const std::string& token) {
-    //RV_CHECK(_word2idx.size() > 0);
+    RV_CHECK(_word2idx.size() > 0);
     auto it = _word2idx.find(token);
     if (it == _word2idx.end()) {
       return -1;
