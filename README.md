@@ -8,9 +8,9 @@ Currently RWKV world tokenizer is implemented.
 * Easy to embed
 * Read vocab from JSON(through minijson)
 
-### Additional feature to RWKV world tokenizer
+### Additional feature to RWKV world tokenizer(TODO)
 
-* UTF-8 fallback(with fallback token_id. default 65530)
+* [ ] UTF-8 fallback(with fallback token_id. default 65530)
 
 ## TODO
 
