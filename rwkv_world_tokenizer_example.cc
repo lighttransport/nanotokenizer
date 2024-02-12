@@ -26,10 +26,11 @@ class TrieTokenizer
       _trie_map[it.first] = it.second;
     }
 
-    _fallback_token_id = max_id + 1;
-    if (_fallback_token_id > 65535) {
+    _utf8_fallback_token_id = max_id + 1;
+    if (_utf8_fallback_token_id > 65535) {
       return false;
     }
+    _utf8_id_offset = 1; // ASCII character is +1'ed in RWKV world vocab
 
     return true;
   }
@@ -55,10 +56,10 @@ class TrieTokenizer
           exit(-1);
         }
 
-        dst.push_back(_fallback_token_id);
+        dst.push_back(_utf8_fallback_token_id);
 
         for (size_t i = 0; i < u8char.size(); i++) {
-          dst.push_back(uint8_t(u8char[i]));
+          dst.push_back(int(uint8_t(u8char[i])) + _utf8_id_offset);
         }
         buf.erase(0, u8len);
       }
@@ -74,9 +75,9 @@ class TrieTokenizer
     std::string dst;
 
     for (size_t i = 0; i < input_ids.size(); i++) {
-      if (input_ids[i] == _fallback_token_id) {
+      if (input_ids[i] == _utf8_fallback_token_id) {
         std::string u8char;
-        if (!utf8_char_from_ids(input_ids.data(), i+1, input_ids.size(), u8char)) {
+        if (!utf8_char_from_ids(input_ids.data(), i+1, input_ids.size(), u8char, _utf8_id_offset)) {
           std::cerr << "utf8 reconstruct failed.\n";
           return false;
         }
@@ -109,7 +110,8 @@ class TrieTokenizer
   std::map<std::string, int> _str_to_id_map;
   std::map<int, std::string> _id_to_str_map;
 
-  int _fallback_token_id{-1};
+  int _utf8_fallback_token_id{-1};
+  int _utf8_id_offset{1}; // ASCII character is +1'ed in RWKV world vocab
 
   inline uint32_t utf8_len(const uint8_t c) {
     if (c <= 127) {
@@ -128,17 +130,17 @@ class TrieTokenizer
   }
 
   // Reconstruct UTF-8 bytes from int sequence(UTF-8 encoded)
-  inline bool utf8_char_from_ids(const int *addr, size_t loc, size_t n, std::string &str) {
+  inline bool utf8_char_from_ids(const int *addr, size_t loc, size_t n, std::string &str, int id_offset = 1) {
     if (loc >= n) {
       return false;
     }
 
-    int start_c = addr[loc];
+    int start_c = addr[loc] - id_offset;
     if ((start_c < 0) || (start_c > 255)) {
       return false;
     }
 
-    uint32_t len = utf8_len(uint8_t(addr[loc]));
+    uint32_t len = utf8_len(uint8_t(start_c));
 
     if (len == 0) {
       return false;
@@ -151,7 +153,7 @@ class TrieTokenizer
     str = "";
     std::vector<uint8_t> buf;
     for (size_t i = 0; i < len; i++) {
-      int ic = addr[loc + i];
+      int ic = addr[loc + i] - id_offset;
       if ((ic < 0) || (ic > 255)) {
         return false;
       }
@@ -294,21 +296,6 @@ int main(int argc, char **argv) {
               << vocab_json_filename << "\n";
     return -1;
   }
-
-#if 0
-  int fallback_token_id = max_id + 1;
-  if (fallback_token_id > 65535) {
-    std::cerr << "Too many tokens in JSON\n";
-    return -1;
-  }
-
-  // We can use uint16_t as value type.
-  tsl::htrie_map<char, int> trie_map;
-
-  for (const auto &it : str_to_id_map) {
-    trie_map[it.first] = it.second;
-  }
-#endif
 
   // encode UTF-8 string
   std::string input_str = u8"吾輩は猫である。🤩";
