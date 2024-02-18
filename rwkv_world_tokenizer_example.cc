@@ -12,17 +12,61 @@
 
 namespace ccedar {
 
-constexpr size_t MAX_KEY_BITS = 14;
+  static inline int u8_len (const char *p) {
+    static const uint8_t u8bytes[256] = { // must be static to tame compilers
+      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+      2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+      3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3, 4,4,4,4,4,4,4,4,5,5,5,5,6,6,6,6
+    };
+    return u8bytes[static_cast <uint8_t> (*p)];
+  }
+
+#if 0
+  // examine UTF8 sequence p consist of only num / alpha / kana characters
+  static inline int char_type (const char* p, const char* end, const ccedar::da <char, int>& chars) {
+    int b (u8_len (p)), n (chars.exactMatchSearch <int> (p, b));
+    if (n == -1) return 3;
+    while ((p += b) != end)
+      if (chars.exactMatchSearch <int> (p, b = u8_len (p)) != n) return 3;
+    return n;
+  }
+#endif
+
+  // convert UTF-8 char to code point
+  static inline int unicode (const char* p, int& b) {
+    const unsigned char *p_ = reinterpret_cast <const unsigned char*> (p);
+    //const int p0 (p_[0]), p1 (p_[1]), p2 (p_[2]), p3 (p_[3]);
+    int p0, p1, p2, p3;
+    
+    switch (b = u8_len (p)) {
+      case 1: { p0 = p_[0]; return   p0 & 0x7f; }
+      case 2: { p0 = p_[0]; p1 = p_[1]; return ((p0 & 0x1f) << 6)  |  (p1 & 0x3f); }
+      case 3: { p0 = p_[0]; p1 = p_[1]; p2 = p_[2];return ((p0 & 0xf)  << 12) | ((p1 & 0x3f) << 6)  |  (p2 & 0x3f); }
+      case 4: { p0 = p_[0]; p1 = p_[1]; p2 = p_[2]; p3 = p_[3]; return ((p0 & 0x7)  << 18) | ((p1 & 0x3f) << 12) | ((p2 & 0x3f) << 6)  | (p3 & 0x3f); }
+      default: return 0;
+    }
+    return 0;
+  }
+
+//constexpr size_t MAX_KEY_BITS = 14;
+constexpr size_t MAX_KEY_BITS = 16; // 65536
 
 class da_ : public ccedar::da<int, int, MAX_KEY_BITS> {
  public:
-#if 0
+
+
   struct utf8_feeder {  // feed one UTF-8 character by one while mapping codes
     const char *p, *const end;
     utf8_feeder(const char *key_, const char *end_) : p(key_), end(end_) {}
     int read(int &b) const { return p == end ? 0 : unicode(p, b); }
     void advance(const int b) { p += b; }
   };
+#if 0
   int longestPrefixSearchWithPOS(const char *key, const char *const end,
                                  int fi_prev, const uint16_t *const c2i,
                                  size_t from = 0) const {
@@ -45,45 +89,35 @@ class da_ : public ccedar::da<int, int, MAX_KEY_BITS> {
       if (from == from_) return n;
     }
   }
+#else
+  // Returns ID of lognest match string in vocabs.
+  int longestPrefixSearch(const char *key, const char *const end,
+                          size_t from = 0) const {
+    size_t from_ = 0;
+    int n(0), i(0), b(0);
+    for (utf8_feeder f(key, end); (i = f.read(b)); f.advance(b)) {
+      size_t pos = 0;
+      const int n_ = traverse(&i, from, pos, pos + 1);
+      if (n_ == CEDAR_NO_VALUE) continue;
+      if (n_ == CEDAR_NO_PATH) break;
+      from_ = from;
+      n = n_;
+    }
+    // ad-hock matching at the moment; it prefers POS-ending patterns
+    //if (!fi_prev) return n;
+    int fi_prev =0;
+    for (const node *const array_ = reinterpret_cast<const node *>(array());;
+         from = array_[from].check) {  // hopefully, in the cache
+      const int n_ = exactMatchSearch<int>(&fi_prev, 1, from);
+      if (n_ != CEDAR_NO_VALUE) return n_;
+      if (from == from_) return n;
+    }
+
+    // shuold never reach here.
+    return CEDAR_NO_VALUE;
+  }
 #endif
 };
-
-  static inline int u8_len (const char *p) {
-    static const uint8_t u8bytes[256] = { // must be static to tame compilers
-      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-      2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-      3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3, 4,4,4,4,4,4,4,4,5,5,5,5,6,6,6,6
-    };
-    return u8bytes[static_cast <uint8_t> (*p)];
-  }
-
-  // examine UTF8 sequence p consist of only num / alpha / kana characters
-  static inline int char_type (const char* p, const char* end, const ccedar::da <char, int>& chars) {
-    int b (u8_len (p)), n (chars.exactMatchSearch <int> (p, b));
-    if (n == -1) return 3;
-    while ((p += b) != end)
-      if (chars.exactMatchSearch <int> (p, b = u8_len (p)) != n) return 3;
-    return n;
-  }
-
-  // convert UTF-8 char to code point
-  static inline int unicode (const char* p, int& b) {
-    const unsigned char *p_ = reinterpret_cast <const unsigned char*> (p);
-    const int p0 (p_[0]), p1 (p_[1]), p2 (p_[2]), p3 (p_[3]);
-    switch (b = u8_len (p)) {
-      case 1: return   p0 & 0x7f;
-      case 2: return ((p0 & 0x1f) << 6)  |  (p1 & 0x3f);
-      case 3: return ((p0 & 0xf)  << 12) | ((p1 & 0x3f) << 6)  |  (p2 & 0x3f);
-      case 4: return ((p0 & 0x7)  << 18) | ((p1 & 0x3f) << 12) | ((p2 & 0x3f) << 6)  | (p3 & 0x3f);
-      default: return 0;
-    }
-    return 0;
-  }
 
 
 
@@ -93,27 +127,44 @@ class da_ : public ccedar::da<int, int, MAX_KEY_BITS> {
 class CedarTrieTokenizer
 {
  public:
+  CedarTrieTokenizer() = default;
+  ~CedarTrieTokenizer() {
+   // free memory in cedar
+    da.clear(/* reuse */false);
+    if (da.array()) { // work around for _array is not free'ed in ccedar
+      std::free(const_cast<void *>(da.array())); 
+    }
+  }
+
   bool load_vocab(const std::map<std::string, int> &str_to_id_map) {
     _str_to_id_map = str_to_id_map;
 
     int max_id{0};
     for (const auto &it : str_to_id_map) {
-      _id_to_str_map[it.second] = it.first;
+      // ignore empty key(zero-length char).
+      if (it.first.empty()) {
+        _empty_char_id = it.second;
+      } else {
+        _id_to_str_map[it.second] = it.first;
+      }
       max_id = (std::max)(max_id, it.second);
     }
 
-    constexpr uint32_t kMaxCodePoint = 0x10ffff; // max unicode block
-
-    // pair = (freq, id)
-    std::vector<std::pair<size_t, int>> counter(kMaxCodePoint + 3); // +3 for some reason
-    for (size_t u = 0; u < counter.size(); u++) {
-      counter[u] = std::make_pair(0, u);
+    _utf8_fallback_token_id = max_id + 1;
+    if (_utf8_fallback_token_id > 65535) {
+      return false;
     }
+    _utf8_id_offset = 1; // ASCII character is +1'ed in RWKV world vocab
 
     for (const auto &it : str_to_id_map) {
 
       const char *str = it.first.c_str();
       const size_t slen = strlen(str);
+
+      // cedar does not accept empty char(zero-length char).
+      if (slen == 0) {
+        continue;
+      }
 
       // UTF-8 string to int(unicode) array
       std::vector<int> ikey;
@@ -124,12 +175,108 @@ class CedarTrieTokenizer
         ikey.push_back(code);
       }
 
-      da.update(ikey.data(), ikey.size(), it.second);
+      da.update(ikey.data(), ikey.size()) = it.second;
     }
 
     return true;
   }
 
+  
+  bool encode(const std::string &s, std::vector<int> &output_ids) {
+    std::vector<int> dst;
+
+    if (s.empty()) {
+      return true;
+    }
+
+    const char *s_ptr = s.c_str();
+    const char *p = s.c_str();
+    const char *e_ptr = s.c_str() + s.size();
+
+    s_ptr += ccedar::u8_len(s_ptr);
+    while (p < e_ptr) {
+      int n = da.longestPrefixSearch(p, e_ptr, /* from */0);
+
+      if ((n < 1) || !_id_to_str_map.count(n)) {
+        // utf-8 fallback
+        int u8len{0};
+        std::string u8char = extract_utf8_char(s, p - s_ptr, u8len);
+        if (u8len == 0) {
+          std::cerr << "invalid utf8 char found.\n";
+          return false;
+        }
+
+        dst.push_back(_utf8_fallback_token_id);
+
+        for (size_t i = 0; i < u8char.size(); i++) {
+          dst.push_back(int(uint8_t(u8char[i])) + _utf8_id_offset);
+
+        }
+        p += u8len;
+      } else {
+
+        dst.push_back(n);
+
+        // TODO: precalculate str len
+        const std::string &tok = _id_to_str_map.at(n);
+
+        int charlen = ccedar::u8_len(tok.c_str());
+        if (charlen < 1) {
+          // this should not happen though. just in case.
+          return false;
+        }
+        p += charlen;
+      }
+    }
+
+    output_ids = dst;
+    return true;
+  }
+
+  bool decode(const std::vector<int> &input_ids, std::string &output_str) {
+
+    std::string dst;
+
+    for (size_t i = 0; i < input_ids.size(); i++) {
+      if (input_ids[i] == _utf8_fallback_token_id) {
+        std::string u8char;
+        if (!utf8_char_from_ids(input_ids.data(), i+1, input_ids.size(), u8char, _utf8_id_offset)) {
+          std::cerr << "utf8 reconstruct failed.\n";
+          return false;
+        }
+
+        i += u8char.size();
+
+        dst += u8char;
+
+        continue;
+      }
+
+      if (!_id_to_str_map.count(input_ids[i])) {
+        std::cerr << "id not found: " << input_ids[i] << "\n";
+        return false;
+      }
+
+      dst += _id_to_str_map[input_ids[i]];
+    }
+
+    output_str = dst;
+
+    return true;
+  }
+
+  std::string str_from_id(int id) {
+    if (_id_to_str_map.count(id)) {
+      return _id_to_str_map.at(id);
+    }
+    if (id == _utf8_fallback_token_id) {
+      return "[[ut8_fallback_id]]";
+    }
+    if (id > 0 && id < 257) { // ASCII or UTF-8 byte
+      return "[[byte]]";
+    }
+    return std::string();
+  }
 
  private:
   ccedar::da_ da;
@@ -140,6 +287,7 @@ class CedarTrieTokenizer
 
   int _utf8_fallback_token_id{-1};
   int _utf8_id_offset{1}; // ASCII character is +1'ed in RWKV world vocab
+  int _empty_char_id{3319};
 
   inline uint32_t utf8_len(const uint8_t c) {
     if (c <= 127) {
@@ -235,9 +383,7 @@ class CedarTrieTokenizer
       return std::string();
     }
   }
-}
-
-
+};
 
 // Up to 65534 vocabs
 class TrieTokenizer
@@ -520,6 +666,7 @@ int main(int argc, char **argv) {
     return -1;
   }
 
+#if 0
   TrieTokenizer tokenizer;
 
   if (!tokenizer.load_vocab(str_to_id_map)) {
@@ -554,6 +701,9 @@ int main(int argc, char **argv) {
     return -1;
   }
   std::cout << "decoded: " << output_str << "\n";
+#endif
+
+
 
 
 #if 0
@@ -584,6 +734,36 @@ int main(int argc, char **argv) {
     }
   }
 #endif
+
+  CedarTrieTokenizer tokenizer;
+
+  if (!tokenizer.load_vocab(str_to_id_map)) {
+    std::cerr << "Vocab seems too large(65535 or more): "
+              << vocab_json_filename << "\n";
+    return -1;
+  }
+
+  std::string input_str = u8"吾輩は猫である。🤩";
+
+  std::vector<int> input_ids;
+  if (!tokenizer.encode(input_str, input_ids)) {
+    return -1;
+  }
+
+  std::cout << "[";
+  for (size_t i = 0; i < input_ids.size(); i++) {
+    if (i > 0) {
+      std::cout << ", ";
+    }
+    std::cout << tokenizer.str_from_id(input_ids[i]) << " : " << input_ids[i];
+  }
+  std::cout << "]\n";
+
+  std::string output_str;
+  if (!tokenizer.decode(input_ids, output_str)) {
+  }
+
+  std::cout << "input_ids.len = " << input_ids.size() << "\n";
 
   return EXIT_SUCCESS;
 }

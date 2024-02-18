@@ -48,7 +48,7 @@ namespace ccedar {
     };
     da () : _array (0), _ninfo (0), _block (0), _bheadF (0), _bheadC (0), _bheadO (0), _capacity (0), _size (0), _no_delete (false), _ok ()
     { _initialize (); }
-    ~da () { clear (); }
+    ~da () { clear (false); }
     // interfance
     template <typename T>
     T exactMatchSearch (const key_type* key) const
@@ -141,9 +141,9 @@ namespace ccedar {
     // currently disabled; implement these if you need
     da (const da&);
     da& operator= (const da&);
-    node*   _array;
-    ninfo*  _ninfo;
-    block*  _block;
+    node*   _array{nullptr};
+    ninfo*  _ninfo{nullptr};
+    block*  _block{nullptr};
     int     _bheadF;  // first block of Full;   0
     int     _bheadC;  // first block of Closed; 0 if no Closed
     int     _bheadO;  // first block of Open;   0 if no Open
