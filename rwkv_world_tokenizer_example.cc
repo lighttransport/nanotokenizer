@@ -8,8 +8,11 @@
 //
 #include "rwkv_world_tokenizer.hh"
 
+#define USE_CEDAR 
+
 #if defined(USE_CEDAR)
 
+#include "cedar.h"
 #include "ccedar_core.h"
 
 namespace ccedar {
@@ -83,7 +86,7 @@ constexpr size_t MAX_KEY_BITS = 16;  // 65536
 
 class da_ : public ccedar::da<int, int, MAX_KEY_BITS> {
  public:
-#if 0  // TODO:
+#if 0
   struct utf8_feeder {  // feed one UTF-8 character by one while mapping codes
     const char *p, *const end;
     utf8_feeder(const char *key_, const char *end_) : p(key_), end(end_) {}
@@ -112,17 +115,6 @@ class da_ : public ccedar::da<int, int, MAX_KEY_BITS> {
       if (from == from_) return n;
     }
   }
-#else
-  // Returns ID of lognest match string in vocabs.
-  // @param[in] s_begin : Starting address of UTF-8 string.
-  // @param[in] s_end : End addres of UTF-8 string.
-  int longestPrefixSearch(const char *s_begin, const char *const s_end) const {
-    // Assuming key is sorted
-    // (i.e, the last candidate is the longest one)
-
-    // TODO
-    return -1;
-  }
 #endif
 };
 
@@ -131,12 +123,14 @@ class da_ : public ccedar::da<int, int, MAX_KEY_BITS> {
 // Trie tokenizer based on ccedar
 class CedarTrieTokenizer {
  public:
-  CedarTrieTokenizer() = default;
+  using trie_t = cedar::da<int>;
+
+  CedarTrieTokenizer(bool use_codepoint = false) : _use_codepoint(use_codepoint) {}
   ~CedarTrieTokenizer() {
     // free memory in cedar
-    da.clear(/* reuse */ false);
-    if (da.array()) {  // work around for _array is not free'ed in ccedar
-      std::free(const_cast<void *>(da.array()));
+    cda.clear(/* reuse */ false);
+    if (cda.array()) {  // work around for _array is not free'ed in ccedar
+      std::free(const_cast<void *>(cda.array()));
     }
   }
 
@@ -160,25 +154,39 @@ class CedarTrieTokenizer {
     }
     _utf8_id_offset = 1;  // ASCII character is +1'ed in RWKV world vocab
 
-    for (const auto &it : str_to_id_map) {
-      const char *str = it.first.c_str();
-      const size_t slen = strlen(str);
+    if (_use_codepoint) {
+      for (const auto &it : str_to_id_map) {
+        const char *str = it.first.c_str();
+        const size_t slen = strlen(str);
 
-      // cedar does not accept empty char(zero-length char).
-      if (slen == 0) {
-        continue;
+        // cedar does not accept empty char(zero-length char).
+        if (slen == 0) {
+          continue;
+        }
+
+        // UTF-8 string to int(unicode) array
+        std::vector<int> ikey;
+
+        int charlen;
+        for (size_t i = 0; i < slen; i += charlen) {
+          int code = ccedar::unicode(it.first.c_str(), charlen);
+          ikey.push_back(code);
+        }
+
+        cda.update(ikey.data(), ikey.size()) = it.second;
       }
+    } else {
+      for (const auto &it : str_to_id_map) {
+        const char *str = it.first.c_str();
+        const size_t slen = strlen(str);
 
-      // UTF-8 string to int(unicode) array
-      std::vector<int> ikey;
+        // cedar does not accept empty char(zero-length char).
+        if (slen == 0) {
+          continue;
+        }
 
-      int charlen;
-      for (size_t i = 0; i < slen; i += charlen) {
-        int code = ccedar::unicode(it.first.c_str(), charlen);
-        ikey.push_back(code);
+        tda.update(str, slen - 1, it.second);
       }
-
-      da.update(ikey.data(), ikey.size()) = it.second;
     }
 
     return true;
@@ -196,6 +204,7 @@ class CedarTrieTokenizer {
     const char *e_ptr = s.c_str() + s.size();
 
     s_ptr += ccedar::u8_len(s_ptr);
+#if 0
     while (p < e_ptr) {
       int n = da.longestPrefixSearch(p, e_ptr);
 
@@ -228,6 +237,7 @@ class CedarTrieTokenizer {
         p += charlen;
       }
     }
+#endif
 
     output_ids = dst;
     return true;
@@ -279,8 +289,10 @@ class CedarTrieTokenizer {
   }
 
  private:
-  ccedar::da_ da;
+  ccedar::da_ cda; // int key
+  trie_t tda; // char key
 
+  bool _use_codepoint{false}; // Use Unicode codepoint to represent string instead of UTF-8 byte?
   std::map<std::string, int> _str_to_id_map;
   std::map<std::vector<int>, int> _unicode_to_id_map;
   std::map<int, std::string> _id_to_str_map;
