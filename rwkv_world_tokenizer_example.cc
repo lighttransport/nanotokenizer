@@ -154,8 +154,7 @@ class CedarTrieTokenizer {
       max_id = (std::max)(max_id, it.second);
     }
 
-    _utf8_fallback_token_id = max_id + 1;
-    if (_utf8_fallback_token_id > 65535) {
+    if (max_id > 65535) {
       return false;
     }
     _utf8_id_offset = 1;  // ASCII character is +1'ed in RWKV world vocab
@@ -208,8 +207,6 @@ class CedarTrieTokenizer {
           return false;
         }
 
-        dst.push_back(_utf8_fallback_token_id);
-
         for (size_t i = 0; i < u8char.size(); i++) {
           dst.push_back(int(uint8_t(u8char[i])) + _utf8_id_offset);
         }
@@ -237,7 +234,7 @@ class CedarTrieTokenizer {
     std::string dst;
 
     for (size_t i = 0; i < input_ids.size(); i++) {
-      if (input_ids[i] == _utf8_fallback_token_id) {
+      if ((input_ids[i] > 0) && (input_ids[i] < (256 + _utf8_fallback_token_id)) {
         std::string u8char;
         if (!utf8_char_from_ids(input_ids.data(), i + 1, input_ids.size(),
                                 u8char, _utf8_id_offset)) {
@@ -269,9 +266,6 @@ class CedarTrieTokenizer {
     if (_id_to_str_map.count(id)) {
       return _id_to_str_map.at(id);
     }
-    if (id == _utf8_fallback_token_id) {
-      return "[[ut8_fallback_id]]";
-    }
     if (id > 0 && id < 257) {  // ASCII or UTF-8 byte
       return "[[byte]]";
     }
@@ -285,7 +279,6 @@ class CedarTrieTokenizer {
   std::map<std::vector<int>, int> _unicode_to_id_map;
   std::map<int, std::string> _id_to_str_map;
 
-  int _utf8_fallback_token_id{-1};
   int _utf8_id_offset{1};  // ASCII character is +1'ed in RWKV world vocab
   int _empty_char_id{3319};
 
@@ -391,20 +384,20 @@ class CedarTrieTokenizer {
 // Up to 65535 vocab id
 // - token id 0 is reserved for empty(zero)
 // - token ids in [127, 256] are reserved for UTF-8 byte fallback(+1'ed)
-// - max_id + 1 is used for UTF-8 fallback token id
 class TrieTokenizer {
  public:
-  bool load_vocab(const std::map<std::string, int> &str_to_id_map) {
+  bool load_vocab(const std::map<std::string, int> &str_to_id_map, std::string &err) {
     _str_to_id_map = str_to_id_map;
 
     int max_id{0};
     for (const auto &it : str_to_id_map) {
       if (it.second == 0) {
+        err += "vocab with id 0 is not allowed.\n";
         return false;
       }
       // reserved for UTF-8 byte fallback
       if ((it.second >= 127) && (it.second <= 256)) {
-        return false;
+        continue;
       }
       _id_to_str_map[it.second] = it.first;
       max_id = (std::max)(max_id, it.second);
@@ -414,8 +407,8 @@ class TrieTokenizer {
       _trie_map[it.first] = it.second;
     }
 
-    _utf8_fallback_token_id = max_id + 1;
-    if (_utf8_fallback_token_id > 65535) {
+    if (max_id > 65535) {
+      err += "Max vocab id exceeds 65535\n";
       return false;
     }
     _utf8_id_offset = 1;  // ASCII character is +1'ed in RWKV world vocab
@@ -467,8 +460,6 @@ class TrieTokenizer {
             return false;
           }
 
-          dst.push_back(_utf8_fallback_token_id);
-
           for (size_t i = 0; i < charlen; i++) {
             dst.push_back(int(uint8_t(_input_str[char_idx + i])) +
                           _utf8_id_offset);
@@ -499,9 +490,9 @@ class TrieTokenizer {
     std::string dst;
 
     for (size_t i = 0; i < input_ids.size(); i++) {
-      if (input_ids[i] == _utf8_fallback_token_id) {
+      if ((input_ids[i] > 0) && (input_ids[i] < (256 + _utf8_id_offset))) {
         std::string u8char;
-        if (!utf8_char_from_ids(input_ids.data(), i + 1, input_ids.size(),
+        if (!utf8_char_from_ids(input_ids.data(), i, input_ids.size(),
                                 u8char, _utf8_id_offset)) {
           std::cerr << "utf8 reconstruct failed.\n";
           return false;
@@ -534,7 +525,6 @@ class TrieTokenizer {
   std::map<std::string, int> _str_to_id_map;
   std::map<int, std::string> _id_to_str_map;
 
-  int _utf8_fallback_token_id{-1};
   int _utf8_id_offset{1};  // ASCII character is +1'ed in RWKV world vocab
 
   inline uint32_t utf8_len(const uint8_t c) {
@@ -715,8 +705,9 @@ int main(int argc, char **argv) {
 #if 1
   TrieTokenizer tokenizer;
 
-  if (!tokenizer.load_vocab(str_to_id_map)) {
-    std::cerr << "Vocab seems too large(65535 or more): " << vocab_json_filename
+  std::string err;
+  if (!tokenizer.load_vocab(str_to_id_map, err)) {
+    std::cerr << "Load vocab failed: " << vocab_json_filename << " err = " << err
               << "\n";
     return -1;
   }
