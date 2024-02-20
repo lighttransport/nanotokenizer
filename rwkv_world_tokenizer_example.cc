@@ -42,7 +42,7 @@ namespace ccedar {
     const unsigned char *p_ = reinterpret_cast <const unsigned char*> (p);
     //const int p0 (p_[0]), p1 (p_[1]), p2 (p_[2]), p3 (p_[3]);
     int p0, p1, p2, p3;
-    
+
     switch (b = u8_len (p)) {
       case 1: { p0 = p_[0]; return   p0 & 0x7f; }
       case 2: { p0 = p_[0]; p1 = p_[1]; return ((p0 & 0x1f) << 6)  |  (p1 & 0x3f); }
@@ -91,30 +91,68 @@ class da_ : public ccedar::da<int, int, MAX_KEY_BITS> {
   }
 #else
   // Returns ID of lognest match string in vocabs.
-  int longestPrefixSearch(const char *key, const char *const end,
-                          size_t from = 0) const {
+  int longestPrefixSearch(const char *s_begin, const char *const s_end) const {
+
+    // Process 1 character for each input string(`key`).
+    // When CEDAR_NO_VALUE found in exactMatchSearch,
+    // Previously found id is the longest match string.
+    int fi_prev = 0;
+
+    size_t from = 0; // updated in `traverse`
+
+    size_t slen = s_end - s_begin - 1;
+    const char *p = s_begin;
+
+    bool done = false;
+
     size_t from_ = 0;
-    int n(0), i(0), b(0);
-    for (utf8_feeder f(key, end); (i = f.read(b)); f.advance(b)) {
-      size_t pos = 0;
-      const int n_ = traverse(&i, from, pos, pos + 1);
-      if (n_ == CEDAR_NO_VALUE) continue;
-      if (n_ == CEDAR_NO_PATH) break;
-      from_ = from;
-      n = n_;
-    }
-    // ad-hock matching at the moment; it prefers POS-ending patterns
-    //if (!fi_prev) return n;
-    int fi_prev =0;
-    for (const node *const array_ = reinterpret_cast<const node *>(array());;
-         from = array_[from].check) {  // hopefully, in the cache
-      const int n_ = exactMatchSearch<int>(&fi_prev, 1, from);
-      if (n_ != CEDAR_NO_VALUE) return n_;
-      if (from == from_) return n;
+    int n(0), i(0), charlen(0);
+    utf8_feeder f(s_begin, s_end);
+    i = f.read(charlen);
+
+    done = (i == 0);
+
+    while (!done) {
+
+      while (i != 0) {
+
+        size_t pos = 0;
+        const int n_ = traverse(&i, from, pos, pos + 1);
+        if (n_ == CEDAR_NO_VALUE) {
+
+          f.advance(charlen);
+          i = f.read(charlen);
+
+          continue;
+        }
+
+        if (n_ == CEDAR_NO_PATH) break;
+        from_ = from;
+        n = n_;
+
+        f.advance(charlen);
+        i = f.read(charlen);
+
+        if (i == 0) {
+          done = true;
+        }
+      }
+
+      if (!fi_prev) {
+        fi_prev = n;
+        continue;
+      }
+
+      for (const node *const array_ = reinterpret_cast<const node *>(array());;
+           from = array_[from].check) {  // hopefully, in the cache
+        const int n_ = exactMatchSearch<int>(&fi_prev, 1, from);
+        if (n_ != CEDAR_NO_VALUE) return n_;
+        if (from == from_) return n;
+      }
     }
 
-    // shuold never reach here.
-    return CEDAR_NO_VALUE;
+    // shuold never reach here?.
+    return n;
   }
 #endif
 };
@@ -132,7 +170,7 @@ class CedarTrieTokenizer
    // free memory in cedar
     da.clear(/* reuse */false);
     if (da.array()) { // work around for _array is not free'ed in ccedar
-      std::free(const_cast<void *>(da.array())); 
+      std::free(const_cast<void *>(da.array()));
     }
   }
 
@@ -169,7 +207,7 @@ class CedarTrieTokenizer
       // UTF-8 string to int(unicode) array
       std::vector<int> ikey;
 
-      int charlen;
+      int charlen{0};
       for (size_t i = 0; i < slen; i += charlen) {
         int code = ccedar::unicode(it.first.c_str(), charlen);
         ikey.push_back(code);
@@ -181,7 +219,7 @@ class CedarTrieTokenizer
     return true;
   }
 
-  
+
   bool encode(const std::string &s, std::vector<int> &output_ids) {
     std::vector<int> dst;
 
@@ -743,7 +781,7 @@ int main(int argc, char **argv) {
     return -1;
   }
 
-  std::string input_str = u8"吾輩は猫である。🤩";
+  std::string input_str = u8"である。🤩";
 
   std::vector<int> input_ids;
   if (!tokenizer.encode(input_str, input_ids)) {
