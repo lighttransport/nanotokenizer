@@ -34,17 +34,6 @@ static inline int u8_len(const char *p) {
   return u8bytes[static_cast<uint8_t>(*p)];
 }
 
-#if 0
-  // examine UTF8 sequence p consist of only num / alpha / kana characters
-  static inline int char_type (const char* p, const char* end, const ccedar::da <char, int>& chars) {
-    int b (u8_len (p)), n (chars.exactMatchSearch <int> (p, b));
-    if (n == -1) return 3;
-    while ((p += b) != end)
-      if (chars.exactMatchSearch <int> (p, b = u8_len (p)) != n) return 3;
-    return n;
-  }
-#endif
-
 // convert UTF-8 char to code point
 static inline int unicode(const char *p, int &b) {
   const unsigned char *p_ = reinterpret_cast<const unsigned char *>(p);
@@ -81,121 +70,26 @@ static inline int unicode(const char *p, int &b) {
   return 0;
 }
 
-// constexpr size_t MAX_KEY_BITS = 14;
-constexpr size_t MAX_KEY_BITS = 16;  // 65536
-
-class da_ : public ccedar::da<int, int, MAX_KEY_BITS> {
- public:
-#if 0
-  struct utf8_feeder {  // feed one UTF-8 character by one while mapping codes
-    const char *p, *const end;
-    utf8_feeder(const char *key_, const char *end_) : p(key_), end(end_) {}
-    int read(int &b) const { return p == end ? 0 : unicode(p, b); }
-    void advance(const int b) { p += b; }
-  };
-  int longestPrefixSearchWithPOS(const char *key, const char *const end,
-                                 int fi_prev, const uint16_t *const c2i,
-                                 size_t from = 0) const {
-    size_t from_ = 0;
-    int n(0), i(0), b(0);
-    for (utf8_feeder f(key, end); (i = c2i[f.read(b)]); f.advance(b)) {
-      size_t pos = 0;
-      const int n_ = traverse(&i, from, pos, pos + 1);
-      if (n_ == CEDAR_NO_VALUE) continue;
-      if (n_ == CEDAR_NO_PATH) break;
-      from_ = from;
-      n = n_;
-    }
-    // ad-hock matching at the moment; it prefers POS-ending patterns
-    if (!fi_prev) return n;
-    for (const node *const array_ = reinterpret_cast<const node *>(array());;
-         from = array_[from].check) {  // hopefully, in the cache
-      const int n_ = exactMatchSearch<int>(&fi_prev, 1, from);
-      if (n_ != CEDAR_NO_VALUE) return n_;
-      if (from == from_) return n;
-    }
-  }
-#else
-  // Returns ID of lognest match string in vocabs.
-  int longestPrefixSearch(const char *s_begin, const char *const s_end) const {
-
-    // Process 1 character for each input string(`key`).
-    // When CEDAR_NO_VALUE found in exactMatchSearch,
-    // Previously found id is the longest match string.
-    int fi_prev = 0;
-
-    size_t from = 0; // updated in `traverse`
-
-    size_t slen = s_end - s_begin - 1;
-    const char *p = s_begin;
-
-    bool done = false;
-
-    size_t from_ = 0;
-    int n(0), i(0), charlen(0);
-    utf8_feeder f(s_begin, s_end);
-    i = f.read(charlen);
-
-    done = (i == 0);
-
-    while (!done) {
-
-      while (i != 0) {
-
-        size_t pos = 0;
-        const int n_ = traverse(&i, from, pos, pos + 1);
-        if (n_ == CEDAR_NO_VALUE) {
-
-          f.advance(charlen);
-          i = f.read(charlen);
-
-          continue;
-        }
-
-        if (n_ == CEDAR_NO_PATH) break;
-        from_ = from;
-        n = n_;
-
-        f.advance(charlen);
-        i = f.read(charlen);
-
-        if (i == 0) {
-          done = true;
-        }
-      }
-
-      if (!fi_prev) {
-        fi_prev = n;
-        continue;
-      }
-
-      for (const node *const array_ = reinterpret_cast<const node *>(array());;
-           from = array_[from].check) {  // hopefully, in the cache
-        const int n_ = exactMatchSearch<int>(&fi_prev, 1, from);
-        if (n_ != CEDAR_NO_VALUE) return n_;
-        if (from == from_) return n;
-      }
-    }
-
-    // shuold never reach here?.
-    return n;
-  }
-#endif
-};
-
-}  // namespace ccedar
+} // namespace ccedar
 
 // Trie tokenizer based on ccedar
 class CedarTrieTokenizer {
  public:
-  using trie_t = cedar::da<int>;
+  static constexpr size_t MAX_KEY_BITS = 16;  // 65536
+
+  using trie_t = cedar::da<int>; // Key = UTF-8 bytes
+  using ctrie_t = ccedar::da<int, int, MAX_KEY_BITS>; // Key = UTF codepoint(int value)
 
   CedarTrieTokenizer(bool use_codepoint = false) : _use_codepoint(use_codepoint) {}
   ~CedarTrieTokenizer() {
     // free memory in cedar
-    cda.clear(/* reuse */ false);
-    if (cda.array()) {  // work around for _array is not free'ed in ccedar
-      std::free(const_cast<void *>(cda.array()));
+    if (_use_codepoint) {
+      ccda.clear(/* reuse */false));
+    } else {
+      cda.clear(/* reuse */ false);
+      if (cda.array()) {  // work around for _array is not free'ed in ccedar
+        std::free(const_cast<void *>(cda.array()));
+      }
     }
   }
 
@@ -213,8 +107,7 @@ class CedarTrieTokenizer {
       max_id = (std::max)(max_id, it.second);
     }
 
-    _utf8_fallback_token_id = max_id + 1;
-    if (_utf8_fallback_token_id > 65535) {
+    if (max_id > 65535) {
       return false;
     }
     _utf8_id_offset = 1;  // ASCII character is +1'ed in RWKV world vocab
@@ -315,9 +208,9 @@ class CedarTrieTokenizer {
     std::string dst;
 
     for (size_t i = 0; i < input_ids.size(); i++) {
-      if (input_ids[i] == _utf8_fallback_token_id) {
+      if (input_ids[i] < (256 + _utf8_id_offset)) {
         std::string u8char;
-        if (!utf8_char_from_ids(input_ids.data(), i + 1, input_ids.size(),
+        if (!utf8_char_from_ids(input_ids.data(), i, input_ids.size(),
                                 u8char, _utf8_id_offset)) {
           std::cerr << "utf8 reconstruct failed.\n";
           return false;
@@ -347,9 +240,6 @@ class CedarTrieTokenizer {
     if (_id_to_str_map.count(id)) {
       return _id_to_str_map.at(id);
     }
-    if (id == _utf8_fallback_token_id) {
-      return "[[ut8_fallback_id]]";
-    }
     if (id > 0 && id < 257) {  // ASCII or UTF-8 byte
       return "[[byte]]";
     }
@@ -357,15 +247,14 @@ class CedarTrieTokenizer {
   }
 
  private:
-  ccedar::da_ cda; // int key
+  ctrie_t cda; // int key
   trie_t tda; // char key
 
-  bool _use_codepoint{false}; // Use Unicode codepoint to represent string instead of UTF-8 byte?
+  const bool _use_codepoint; // Use Unicode codepoint to represent string instead of UTF-8 byte?
   std::map<std::string, int> _str_to_id_map;
   std::map<std::vector<int>, int> _unicode_to_id_map;
   std::map<int, std::string> _id_to_str_map;
 
-  int _utf8_fallback_token_id{-1};
   int _utf8_id_offset{1};  // ASCII character is +1'ed in RWKV world vocab
   int _empty_char_id{3319};
 
