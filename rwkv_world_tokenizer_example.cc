@@ -8,23 +8,31 @@
 //
 #include "rwkv_world_tokenizer.hh"
 
+#define USE_CEDAR
+
+#if defined(USE_CEDAR)
+
+#include "cedar.h"
 #include "ccedar_core.h"
 
 namespace ccedar {
 
-  static inline int u8_len (const char *p) {
-    static const uint8_t u8bytes[256] = { // must be static to tame compilers
-      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-      2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-      3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3, 4,4,4,4,4,4,4,4,5,5,5,5,6,6,6,6
-    };
-    return u8bytes[static_cast <uint8_t> (*p)];
-  }
+static inline int u8_len(const char *p) {
+  static const uint8_t u8bytes[256] = {
+      // must be static to tame compilers
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+      2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+      4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6};
+  return u8bytes[static_cast<uint8_t>(*p)];
+}
 
 #if 0
   // examine UTF8 sequence p consist of only num / alpha / kana characters
@@ -37,36 +45,54 @@ namespace ccedar {
   }
 #endif
 
-  // convert UTF-8 char to code point
-  static inline int unicode (const char* p, int& b) {
-    const unsigned char *p_ = reinterpret_cast <const unsigned char*> (p);
-    //const int p0 (p_[0]), p1 (p_[1]), p2 (p_[2]), p3 (p_[3]);
-    int p0, p1, p2, p3;
+// convert UTF-8 char to code point
+static inline int unicode(const char *p, int &b) {
+  const unsigned char *p_ = reinterpret_cast<const unsigned char *>(p);
+  // const int p0 (p_[0]), p1 (p_[1]), p2 (p_[2]), p3 (p_[3]);
+  int p0, p1, p2, p3;
 
-    switch (b = u8_len (p)) {
-      case 1: { p0 = p_[0]; return   p0 & 0x7f; }
-      case 2: { p0 = p_[0]; p1 = p_[1]; return ((p0 & 0x1f) << 6)  |  (p1 & 0x3f); }
-      case 3: { p0 = p_[0]; p1 = p_[1]; p2 = p_[2];return ((p0 & 0xf)  << 12) | ((p1 & 0x3f) << 6)  |  (p2 & 0x3f); }
-      case 4: { p0 = p_[0]; p1 = p_[1]; p2 = p_[2]; p3 = p_[3]; return ((p0 & 0x7)  << 18) | ((p1 & 0x3f) << 12) | ((p2 & 0x3f) << 6)  | (p3 & 0x3f); }
-      default: return 0;
+  switch (b = u8_len(p)) {
+    case 1: {
+      p0 = p_[0];
+      return p0 & 0x7f;
     }
-    return 0;
+    case 2: {
+      p0 = p_[0];
+      p1 = p_[1];
+      return ((p0 & 0x1f) << 6) | (p1 & 0x3f);
+    }
+    case 3: {
+      p0 = p_[0];
+      p1 = p_[1];
+      p2 = p_[2];
+      return ((p0 & 0xf) << 12) | ((p1 & 0x3f) << 6) | (p2 & 0x3f);
+    }
+    case 4: {
+      p0 = p_[0];
+      p1 = p_[1];
+      p2 = p_[2];
+      p3 = p_[3];
+      return ((p0 & 0x7) << 18) | ((p1 & 0x3f) << 12) | ((p2 & 0x3f) << 6) |
+             (p3 & 0x3f);
+    }
+    default:
+      return 0;
   }
+  return 0;
+}
 
-//constexpr size_t MAX_KEY_BITS = 14;
-constexpr size_t MAX_KEY_BITS = 16; // 65536
+// constexpr size_t MAX_KEY_BITS = 14;
+constexpr size_t MAX_KEY_BITS = 16;  // 65536
 
 class da_ : public ccedar::da<int, int, MAX_KEY_BITS> {
  public:
-
-
+#if 0
   struct utf8_feeder {  // feed one UTF-8 character by one while mapping codes
     const char *p, *const end;
     utf8_feeder(const char *key_, const char *end_) : p(key_), end(end_) {}
     int read(int &b) const { return p == end ? 0 : unicode(p, b); }
     void advance(const int b) { p += b; }
   };
-#if 0
   int longestPrefixSearchWithPOS(const char *key, const char *const end,
                                  int fi_prev, const uint16_t *const c2i,
                                  size_t from = 0) const {
@@ -157,20 +183,19 @@ class da_ : public ccedar::da<int, int, MAX_KEY_BITS> {
 #endif
 };
 
-
-
-} // namespace ccedar
+}  // namespace ccedar
 
 // Trie tokenizer based on ccedar
-class CedarTrieTokenizer
-{
+class CedarTrieTokenizer {
  public:
-  CedarTrieTokenizer() = default;
+  using trie_t = cedar::da<int>;
+
+  CedarTrieTokenizer(bool use_codepoint = false) : _use_codepoint(use_codepoint) {}
   ~CedarTrieTokenizer() {
-   // free memory in cedar
-    da.clear(/* reuse */false);
-    if (da.array()) { // work around for _array is not free'ed in ccedar
-      std::free(const_cast<void *>(da.array()));
+    // free memory in cedar
+    cda.clear(/* reuse */ false);
+    if (cda.array()) {  // work around for _array is not free'ed in ccedar
+      std::free(const_cast<void *>(cda.array()));
     }
   }
 
@@ -192,33 +217,48 @@ class CedarTrieTokenizer
     if (_utf8_fallback_token_id > 65535) {
       return false;
     }
-    _utf8_id_offset = 1; // ASCII character is +1'ed in RWKV world vocab
+    _utf8_id_offset = 1;  // ASCII character is +1'ed in RWKV world vocab
 
-    for (const auto &it : str_to_id_map) {
+    if (_use_codepoint) {
+      for (const auto &it : str_to_id_map) {
+        const char *str = it.first.c_str();
+        const size_t slen = strlen(str);
 
-      const char *str = it.first.c_str();
-      const size_t slen = strlen(str);
+        // cedar does not accept empty char(zero-length char).
+        if (slen == 0) {
+          continue;
+        }
 
-      // cedar does not accept empty char(zero-length char).
-      if (slen == 0) {
-        continue;
-      }
+        // UTF-8 string to int(unicode) array
+        std::vector<int> ikey;
 
-      // UTF-8 string to int(unicode) array
-      std::vector<int> ikey;
+        int charlen;
+        for (size_t i = 0; i < slen; i += charlen) {
+          int code = ccedar::unicode(it.first.c_str(), charlen);
+          ikey.push_back(code);
+        }
 
       int charlen{0};
       for (size_t i = 0; i < slen; i += charlen) {
         int code = ccedar::unicode(it.first.c_str(), charlen);
         ikey.push_back(code);
       }
+    } else {
+      for (const auto &it : str_to_id_map) {
+        const char *str = it.first.c_str();
+        const size_t slen = strlen(str);
 
-      da.update(ikey.data(), ikey.size()) = it.second;
+        // cedar does not accept empty char(zero-length char).
+        if (slen == 0) {
+          continue;
+        }
+
+        tda.update(str, slen - 1, it.second);
+      }
     }
 
     return true;
   }
-
 
   bool encode(const std::string &s, std::vector<int> &output_ids) {
     std::vector<int> dst;
@@ -232,8 +272,9 @@ class CedarTrieTokenizer
     const char *e_ptr = s.c_str() + s.size();
 
     s_ptr += ccedar::u8_len(s_ptr);
+#if 0
     while (p < e_ptr) {
-      int n = da.longestPrefixSearch(p, e_ptr, /* from */0);
+      int n = da.longestPrefixSearch(p, e_ptr);
 
       if ((n < 1) || !_id_to_str_map.count(n)) {
         // utf-8 fallback
@@ -248,11 +289,9 @@ class CedarTrieTokenizer
 
         for (size_t i = 0; i < u8char.size(); i++) {
           dst.push_back(int(uint8_t(u8char[i])) + _utf8_id_offset);
-
         }
         p += u8len;
       } else {
-
         dst.push_back(n);
 
         // TODO: precalculate str len
@@ -266,19 +305,20 @@ class CedarTrieTokenizer
         p += charlen;
       }
     }
+#endif
 
     output_ids = dst;
     return true;
   }
 
   bool decode(const std::vector<int> &input_ids, std::string &output_str) {
-
     std::string dst;
 
     for (size_t i = 0; i < input_ids.size(); i++) {
       if (input_ids[i] == _utf8_fallback_token_id) {
         std::string u8char;
-        if (!utf8_char_from_ids(input_ids.data(), i+1, input_ids.size(), u8char, _utf8_id_offset)) {
+        if (!utf8_char_from_ids(input_ids.data(), i + 1, input_ids.size(),
+                                u8char, _utf8_id_offset)) {
           std::cerr << "utf8 reconstruct failed.\n";
           return false;
         }
@@ -310,21 +350,23 @@ class CedarTrieTokenizer
     if (id == _utf8_fallback_token_id) {
       return "[[ut8_fallback_id]]";
     }
-    if (id > 0 && id < 257) { // ASCII or UTF-8 byte
+    if (id > 0 && id < 257) {  // ASCII or UTF-8 byte
       return "[[byte]]";
     }
     return std::string();
   }
 
  private:
-  ccedar::da_ da;
+  ccedar::da_ cda; // int key
+  trie_t tda; // char key
 
+  bool _use_codepoint{false}; // Use Unicode codepoint to represent string instead of UTF-8 byte?
   std::map<std::string, int> _str_to_id_map;
   std::map<std::vector<int>, int> _unicode_to_id_map;
   std::map<int, std::string> _id_to_str_map;
 
   int _utf8_fallback_token_id{-1};
-  int _utf8_id_offset{1}; // ASCII character is +1'ed in RWKV world vocab
+  int _utf8_id_offset{1};  // ASCII character is +1'ed in RWKV world vocab
   int _empty_char_id{3319};
 
   inline uint32_t utf8_len(const uint8_t c) {
@@ -344,7 +386,8 @@ class CedarTrieTokenizer
   }
 
   // Reconstruct UTF-8 bytes from int sequence(UTF-8 encoded)
-  inline bool utf8_char_from_ids(const int *addr, size_t loc, size_t n, std::string &str, int id_offset = 1) {
+  inline bool utf8_char_from_ids(const int *addr, size_t loc, size_t n,
+                                 std::string &str, int id_offset = 1) {
     if (loc >= n) {
       return false;
     }
@@ -422,17 +465,27 @@ class CedarTrieTokenizer
     }
   }
 };
+#endif
 
-// Up to 65534 vocabs
-class TrieTokenizer
-{
+// hat-trie version of Tokenizer.
+// Up to 65535 vocab id
+// - token id 0 is reserved for empty(zero)
+// - token ids in [127, 256] are reserved for UTF-8 byte fallback(+1'ed)
+// - max_id + 1 is used for UTF-8 fallback token id
+class TrieTokenizer {
  public:
-
   bool load_vocab(const std::map<std::string, int> &str_to_id_map) {
     _str_to_id_map = str_to_id_map;
 
     int max_id{0};
     for (const auto &it : str_to_id_map) {
+      if (it.second == 0) {
+        return false;
+      }
+      // reserved for UTF-8 byte fallback
+      if ((it.second >= 127) && (it.second <= 256)) {
+        return false;
+      }
       _id_to_str_map[it.second] = it.first;
       max_id = (std::max)(max_id, it.second);
     }
@@ -445,7 +498,7 @@ class TrieTokenizer
     if (_utf8_fallback_token_id > 65535) {
       return false;
     }
-    _utf8_id_offset = 1; // ASCII character is +1'ed in RWKV world vocab
+    _utf8_id_offset = 1;  // ASCII character is +1'ed in RWKV world vocab
 
     return true;
   }
@@ -453,32 +506,69 @@ class TrieTokenizer
   bool encode(const std::string &_input_str, std::vector<int> &output_ids) {
     std::vector<int> dst;
 
-    std::string buf = _input_str;
+    const size_t s_len = _input_str.size();
 
-    while (!buf.empty()) {
+    if (s_len == 0) {
+      // empty input
+      return false;
+    }
 
-      auto longest_prefix = _trie_map.longest_prefix(buf);
-      // 3319 = empty string.
-      if ((longest_prefix != _trie_map.end()) && !longest_prefix.key().empty()) {
-        dst.push_back(*longest_prefix);
+    size_t char_idx = 0;
+    int prev_id = -1;  // Track previously matched result.
+    size_t key_size = 0;
 
-        buf.erase(0, longest_prefix.key().size());
-      } else {
-        int u8len{0};
-        std::string u8char = extract_utf8_char(buf, 0, u8len);
-        if (u8len == 0) {
-          std::cerr << "invalid utf8 char found.\n";
-          exit(-1);
-        }
+    // Find match for each UTF-8 character,
+    // Since `longest_prefix` is quite slow for larger input string.
 
-        dst.push_back(_utf8_fallback_token_id);
-
-        for (size_t i = 0; i < u8char.size(); i++) {
-          dst.push_back(int(uint8_t(u8char[i])) + _utf8_id_offset);
-        }
-        buf.erase(0, u8len);
+    while ((char_idx + key_size) < s_len) {
+      // Extract UTF-8 char.
+      uint32_t charlen = utf8_len(_input_str[char_idx]);
+      if (charlen == 0) {
+        // Found invalid UTF-8 string.
+        return false;
       }
 
+      key_size += charlen;
+
+      auto it = _trie_map.find_ks(&_input_str[char_idx], key_size);
+      if (it == _trie_map.cend()) {
+        if (prev_id > 0) {
+          // prev_id = id of longest matched key
+          dst.push_back(prev_id);
+
+          // pop current UTF-8 character.
+          key_size -= charlen;
+
+        } else {
+          // UTF-8 byte fallback
+          // Should be single UTF-8 character
+          if (key_size != charlen) {
+            // This should not happen. Just in case.
+            return false;
+          }
+
+          dst.push_back(_utf8_fallback_token_id);
+
+          for (size_t i = 0; i < charlen; i++) {
+            dst.push_back(int(uint8_t(_input_str[char_idx + i])) +
+                          _utf8_id_offset);
+          }
+        }
+
+        prev_id = -1;
+
+        char_idx += key_size;
+        key_size = 0;
+      } else {
+        prev_id = *(it);
+
+        // Continue search
+      }
+    }
+
+    // Remainder
+    if (prev_id) {
+      dst.push_back(prev_id);
     }
 
     output_ids = dst;
@@ -486,13 +576,13 @@ class TrieTokenizer
   }
 
   bool decode(const std::vector<int> input_ids, std::string &output_str) {
-
     std::string dst;
 
     for (size_t i = 0; i < input_ids.size(); i++) {
       if (input_ids[i] == _utf8_fallback_token_id) {
         std::string u8char;
-        if (!utf8_char_from_ids(input_ids.data(), i+1, input_ids.size(), u8char, _utf8_id_offset)) {
+        if (!utf8_char_from_ids(input_ids.data(), i + 1, input_ids.size(),
+                                u8char, _utf8_id_offset)) {
           std::cerr << "utf8 reconstruct failed.\n";
           return false;
         }
@@ -518,7 +608,6 @@ class TrieTokenizer
   }
 
  private:
-
   // We can use uint16_t as value type.
   tsl::htrie_map<char, int> _trie_map;
 
@@ -526,7 +615,7 @@ class TrieTokenizer
   std::map<int, std::string> _id_to_str_map;
 
   int _utf8_fallback_token_id{-1};
-  int _utf8_id_offset{1}; // ASCII character is +1'ed in RWKV world vocab
+  int _utf8_id_offset{1};  // ASCII character is +1'ed in RWKV world vocab
 
   inline uint32_t utf8_len(const uint8_t c) {
     if (c <= 127) {
@@ -545,7 +634,8 @@ class TrieTokenizer
   }
 
   // Reconstruct UTF-8 bytes from int sequence(UTF-8 encoded)
-  inline bool utf8_char_from_ids(const int *addr, size_t loc, size_t n, std::string &str, int id_offset = 1) {
+  inline bool utf8_char_from_ids(const int *addr, size_t loc, size_t n,
+                                 std::string &str, int id_offset = 1) {
     if (loc >= n) {
       return false;
     }
@@ -622,8 +712,6 @@ class TrieTokenizer
       return std::string();
     }
   }
-
-
 };
 
 int main(int argc, char **argv) {
@@ -704,17 +792,24 @@ int main(int argc, char **argv) {
     return -1;
   }
 
-#if 0
+#if 1
   TrieTokenizer tokenizer;
 
   if (!tokenizer.load_vocab(str_to_id_map)) {
-    std::cerr << "Vocab seems too large(65535 or more): "
-              << vocab_json_filename << "\n";
+    std::cerr << "Vocab seems too large(65535 or more): " << vocab_json_filename
+              << "\n";
     return -1;
   }
 
   // encode UTF-8 string
   std::string input_str = u8"吾輩は猫である。🤩";
+  // HACK
+  size_t nrepeat = 2;
+
+  for (size_t i = 0; i < nrepeat; i++) {
+    input_str += "名前はまだない。にゃん。";
+  }
+
   std::cout << "input: " << input_str << "\n";
 
   std::vector<int> output_ids;
@@ -739,45 +834,14 @@ int main(int argc, char **argv) {
     return -1;
   }
   std::cout << "decoded: " << output_str << "\n";
-#endif
 
-
-
-
-#if 0
-  while (!input_str.empty()) {
-    auto longest_prefix = trie_map.longest_prefix(input_str);
-    // 3319 = empty string.
-    if ((longest_prefix != trie_map.end()) && !longest_prefix.key().empty()) {
-      std::cout << "{" << longest_prefix.key() << ", " << *longest_prefix
-                << "}\n";
-      input_str.erase(0, longest_prefix.key().size());
-    } else {
-      int u8len{0};
-      std::string u8char = extract_utf8_char(input_str, 0, u8len);
-      if (u8len == 0) {
-        std::cerr << "invalid utf8 char found.\n";
-        exit(-1);
-      }
-
-      std::cout << "{utf8 byte fallback : " << fallback_token_id << ", ";
-      for (size_t i = 0; i < u8char.size(); i++) {
-        if (i > 0) {
-          std::cout << ", ";
-        }
-        std::cout << int(u8char[i]);
-      }
-      std::cout << "}\n";
-      input_str.erase(0, u8len);
-    }
-  }
-#endif
+#else
 
   CedarTrieTokenizer tokenizer;
 
   if (!tokenizer.load_vocab(str_to_id_map)) {
-    std::cerr << "Vocab seems too large(65535 or more): "
-              << vocab_json_filename << "\n";
+    std::cerr << "Vocab seems too large(65535 or more): " << vocab_json_filename
+              << "\n";
     return -1;
   }
 
@@ -802,6 +866,7 @@ int main(int argc, char **argv) {
   }
 
   std::cout << "input_ids.len = " << input_ids.size() << "\n";
+#endif
 
   return EXIT_SUCCESS;
 }
