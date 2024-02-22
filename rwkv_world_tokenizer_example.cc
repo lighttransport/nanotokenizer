@@ -8,9 +8,9 @@
 //
 #include "rwkv_world_tokenizer.hh"
 
-#define USE_CEDAR
+#define NANOTOKENIZER_USE_CEDAR
 
-#if defined(USE_CEDAR)
+#if defined(NANOTOKENIZER_USE_CEDAR)
 
 #include "cedar.h"
 #include "ccedar_core.h"
@@ -153,7 +153,7 @@ class CedarTrieTokenizer {
           continue;
         }
 
-        _cda.update(str, slen - 1, it.second);
+        _cda.update(str, slen, it.second);
       }
     }
 
@@ -241,7 +241,7 @@ class CedarTrieTokenizer {
     std::string dst;
 
     for (size_t i = 0; i < input_ids.size(); i++) {
-      if (input_ids[i] < (256 + _utf8_id_offset)) {
+      if ((input_ids[i] > 0) && (input_ids[i] < (256 + _utf8_id_offset))) {
         std::string u8char;
         if (!utf8_char_from_ids(input_ids.data(), i, input_ids.size(),
                                 u8char, _utf8_id_offset)) {
@@ -284,7 +284,7 @@ class CedarTrieTokenizer {
   trie_t _cda; // char key
 
   bool _encode_codepoint(const std::string &s, std::vector<int> &output_ids) {
-    std::vector<int> codepoints; 
+    std::vector<int> codepoints;
     std::vector<int> dst;
 
     if (s.empty()) {
@@ -295,26 +295,25 @@ class CedarTrieTokenizer {
 
     size_t char_idx = 0;
     int prev_id = -1;  // Track previously matched result.
-    size_t key_size = 0;
+    int char_len = 0;
 
     // Find match for UTF codepoint representation of input string.
 
-    while ((char_idx + key_size) < s_len) {
+    while ((char_idx + char_len) < s_len) {
 
-      int charlen;
-      int code = ccedar::unicode(&s[char_idx], charlen);
-      if (charlen == 0) {
+      int code = ccedar::unicode(&s[char_idx], char_len);
+      if (char_len == 0) {
+        std::cerr << "charlen is 0.\n";
         // invalid
         return false;
       }
 
       codepoints.push_back(code);
 
-      key_size += charlen;
-
       int ret = _ida.exactMatchSearch<int>(codepoints.data(), codepoints.size());
 
       if (ret > 65535) {
+        std::cerr << "exactMatchSearch failed. ret = " << ret  << "\n";
         // ???
         return false;
       }
@@ -324,35 +323,27 @@ class CedarTrieTokenizer {
           // prev_id = id of longest matched key
           dst.push_back(prev_id);
 
-          // pop current UTF-8 character & codepoint value.
-          key_size -= charlen;
-          codepoints.pop_back();
+          // pop last UTF-8 char
+          char_idx -= char_len;
 
         } else {
           // UTF-8 byte fallback
-          // Should be single UTF-8 character
-          if (key_size != charlen) {
-            // This should not happen. Just in case.
-            return false;
-          }
-
-          for (size_t i = 0; i < charlen; i++) {
+          for (size_t i = 0; i < char_len; i++) {
             dst.push_back(int(uint8_t(s[char_idx + i])) +
                           _utf8_id_offset);
           }
         }
+        codepoints.clear();
 
         prev_id = -1;
-
-        char_idx += key_size;
-        key_size = 0;
-        codepoints.clear();
 
       } else {
         prev_id = ret;
 
         // Continue search
       }
+
+      char_idx += char_len;
     }
 
     // Remainder
@@ -474,20 +465,20 @@ class CedarTrieTokenizer {
 // Up to 65535 vocab id
 // - token id 0 is reserved for empty(zero)
 // - token ids in [127, 256] are reserved for UTF-8 byte fallback(+1'ed)
-// - max_id + 1 is used for UTF-8 fallback token id
 class TrieTokenizer {
  public:
-  bool load_vocab(const std::map<std::string, int> &str_to_id_map) {
+  bool load_vocab(const std::map<std::string, int> &str_to_id_map, std::string &err) {
     _str_to_id_map = str_to_id_map;
 
     int max_id{0};
     for (const auto &it : str_to_id_map) {
       if (it.second == 0) {
+        err += "vocab with id 0 is not allowed.\n";
         return false;
       }
       // reserved for UTF-8 byte fallback
       if ((it.second >= 127) && (it.second <= 256)) {
-        return false;
+        continue;
       }
       _id_to_str_map[it.second] = it.first;
       max_id = (std::max)(max_id, it.second);
@@ -497,8 +488,8 @@ class TrieTokenizer {
       _trie_map[it.first] = it.second;
     }
 
-    _utf8_fallback_token_id = max_id + 1;
-    if (_utf8_fallback_token_id > 65535) {
+    if (max_id > 65535) {
+      err += "Max vocab id exceeds 65535\n";
       return false;
     }
     _utf8_id_offset = 1;  // ASCII character is +1'ed in RWKV world vocab
@@ -550,8 +541,6 @@ class TrieTokenizer {
             return false;
           }
 
-          dst.push_back(_utf8_fallback_token_id);
-
           for (size_t i = 0; i < charlen; i++) {
             dst.push_back(int(uint8_t(_input_str[char_idx + i])) +
                           _utf8_id_offset);
@@ -582,9 +571,9 @@ class TrieTokenizer {
     std::string dst;
 
     for (size_t i = 0; i < input_ids.size(); i++) {
-      if (input_ids[i] == _utf8_fallback_token_id) {
+      if ((input_ids[i] > 0) && (input_ids[i] < (256 + _utf8_id_offset))) {
         std::string u8char;
-        if (!utf8_char_from_ids(input_ids.data(), i + 1, input_ids.size(),
+        if (!utf8_char_from_ids(input_ids.data(), i, input_ids.size(),
                                 u8char, _utf8_id_offset)) {
           std::cerr << "utf8 reconstruct failed.\n";
           return false;
@@ -617,7 +606,6 @@ class TrieTokenizer {
   std::map<std::string, int> _str_to_id_map;
   std::map<int, std::string> _id_to_str_map;
 
-  int _utf8_fallback_token_id{-1};
   int _utf8_id_offset{1};  // ASCII character is +1'ed in RWKV world vocab
 
   inline uint32_t utf8_len(const uint8_t c) {
@@ -795,80 +783,100 @@ int main(int argc, char **argv) {
     return -1;
   }
 
-#if 1
-  TrieTokenizer tokenizer;
+  {
+    TrieTokenizer tokenizer;
 
-  if (!tokenizer.load_vocab(str_to_id_map)) {
-    std::cerr << "Vocab seems too large(65535 or more): " << vocab_json_filename
-              << "\n";
-    return -1;
-  }
-
-  // encode UTF-8 string
-  std::string input_str = u8"吾輩は猫である。🤩";
-  // HACK
-  size_t nrepeat = 2;
-
-  for (size_t i = 0; i < nrepeat; i++) {
-    input_str += "名前はまだない。にゃん。";
-  }
-
-  std::cout << "input: " << input_str << "\n";
-
-  std::vector<int> output_ids;
-
-  if (!tokenizer.encode(input_str, output_ids)) {
-    std::cerr << "encode failed.\n";
-    return -1;
-  }
-
-  std::cout << "ids = [";
-  for (size_t i = 0; i < output_ids.size(); i++) {
-    if (i > 0) {
-      std::cout << ", ";
+    std::string err;
+    if (!tokenizer.load_vocab(str_to_id_map, err)) {
+      std::cerr << "Load vocab failed: " << vocab_json_filename << " err = " << err
+                << "\n";
+      return -1;
     }
-    std::cout << output_ids[i];
-  }
-  std::cout << "]\n";
 
-  std::string output_str;
-  if (!tokenizer.decode(output_ids, output_str)) {
-    std::cerr << "decode failed.\n";
-    return -1;
-  }
-  std::cout << "decoded: " << output_str << "\n";
+    // encode UTF-8 string
+    std::string input_str = u8"吾輩は猫である。🤩";
+    // HACK
+    size_t nrepeat = 2;
 
-#else
-
-  CedarTrieTokenizer tokenizer;
-
-  if (!tokenizer.load_vocab(str_to_id_map)) {
-    std::cerr << "Vocab seems too large(65535 or more): " << vocab_json_filename
-              << "\n";
-    return -1;
-  }
-
-  std::string input_str = u8"である。🤩";
-
-  std::vector<int> input_ids;
-  if (!tokenizer.encode(input_str, input_ids)) {
-    return -1;
-  }
-
-  std::cout << "[";
-  for (size_t i = 0; i < input_ids.size(); i++) {
-    if (i > 0) {
-      std::cout << ", ";
+    for (size_t i = 0; i < nrepeat; i++) {
+      input_str += "名前はまだない。にゃん。";
     }
-    std::cout << tokenizer.str_from_id(input_ids[i]) << " : " << input_ids[i];
-  }
-  std::cout << "]\n";
 
-  std::string output_str;
-  if (!tokenizer.decode(input_ids, output_str)) {
+    std::cout << "input: " << input_str << "\n";
+
+    std::vector<int> output_ids;
+
+    if (!tokenizer.encode(input_str, output_ids)) {
+      std::cerr << "encode failed.\n";
+      return -1;
+    }
+
+    std::cout << "ids = [";
+    for (size_t i = 0; i < output_ids.size(); i++) {
+      if (i > 0) {
+        std::cout << ", ";
+      }
+      std::cout << output_ids[i];
+    }
+    std::cout << "]\n";
+
+    std::string output_str;
+    if (!tokenizer.decode(output_ids, output_str)) {
+      std::cerr << "decode failed.\n";
+      return -1;
+    }
+    std::cout << "decoded: " << output_str << "\n";
   }
 
-  std::cout << "input_ids.len = " << input_ids.size() << "\n";
+
+#if defined(NANOTOKENIZER_USE_CEDAR)
+
+  {
+    bool use_codepoint{false};
+    if (argc > 2) {
+      use_codepoint = bool(argv[2]);
+    }
+
+    CedarTrieTokenizer tokenizer(use_codepoint);
+
+    std::string err;
+    if (!tokenizer.load_vocab(str_to_id_map, err)) {
+      std::cerr << "Load vocab failed: " << vocab_json_filename << " err = " << err
+                << "\n";
+      return -1;
+    }
+
+    // encode UTF-8 string
+    std::string input_str = u8"吾輩は猫である。🤩";
+    // HACK
+    size_t nrepeat = 2;
+
+    for (size_t i = 0; i < nrepeat; i++) {
+      input_str += "名前はまだない。にゃん。";
+    }
+
+    std::vector<int> input_ids;
+    if (!tokenizer.encode(input_str, input_ids)) {
+      std::cerr << "Failed to encode\n";
+      return -1;
+    }
+
+    std::cout << "[";
+    for (size_t i = 0; i < input_ids.size(); i++) {
+      if (i > 0) {
+        std::cout << ", ";
+      }
+      std::cout << tokenizer.str_from_id(input_ids[i]) << " : " << input_ids[i];
+    }
+    std::cout << "]\n";
+
+    std::string output_str;
+    if (!tokenizer.decode(input_ids, output_str)) {
+      std::cerr << "decode failed.\n";
+      return -1;
+    }
+    std::cout << "decoded: " << output_str << "\n";
+  }
 #endif
 
   return EXIT_SUCCESS;
