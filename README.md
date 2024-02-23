@@ -8,7 +8,15 @@ Currently RWKV world tokenizer is implemented.
 * Easy to embed
 * Read vocab from JSON(through minijson)
 
-### Additional feature to RWKV world tokenizer.
+## Variants
+
+* Naiive Trie tree implementation : rwkv_world_tokenizer_trie.hh
+* Efficient version using hat-trie : rwkv_world_tokenizer_hat.hh
+* Efficient version using cedar : rwkv_world_tokenizer_cedar.hh
+
+If you want to run tokenizer with no C++ exception(e.g. WASM), naiive or cedar version recommended to use.
+
+### Additional feature to original RWKV world tokenizer.
 
 * [x] UTF-8 byte fallback
 

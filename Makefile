@@ -1,4 +1,5 @@
-EXTRA_CXXFLAGS = -fsanitize=address
+#EXTRA_CXXFLAGS=-fsanitize=address
+EXTRA_CXXFLAGS=
 
 all:
-	clang++ -o example_rwkv_world -g -O1 -std=c++17 $(EXTRA_CXXFLAGS) -DRWKV_ENABLE_EXCEPTION rwkv_world_tokenizer_example.cc rwkv_world_tokenizer.cc
+	clang++ -Wall -o example_rwkv_world -g -O2 -std=c++14 $(EXTRA_CXXFLAGS) -DRWKV_ENABLE_EXCEPTION rwkv_world_tokenizer_example.cc

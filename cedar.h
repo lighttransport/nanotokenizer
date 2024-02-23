@@ -7,13 +7,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cassert>
+//#include <cassert>
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
-#define STATIC_ASSERT(e, msg) typedef char msg[(e) ? 1 : -1]
+//#define STATIC_ASSERT(e, msg) typedef char msg[(e) ? 1 : -1]
 
 namespace cedar {
   // typedefs
@@ -67,9 +67,7 @@ namespace cedar {
       block () : prev (0), next (0), num (256), reject (257), trial (0), ehead (0) {}
     };
     da () : tracking_node (), _array (0), _ninfo (0), _block (0), _bheadF (0), _bheadC (0), _bheadO (0), _capacity (0), _size (0), _no_delete (false), _reject () {
-      STATIC_ASSERT(sizeof (value_type) <= sizeof (int),
-                    value_type_is_not_supported___maintain_a_value_array_by_yourself_and_store_its_index
-                    );
+      static_assert(sizeof (value_type) <= sizeof (int), "value_type size exceeds sizeof(int)");
       _initialize ();
     }
     ~da () { clear (false); }
