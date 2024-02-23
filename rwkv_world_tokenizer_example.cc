@@ -137,7 +137,7 @@ class CedarTrieTokenizer {
 
         int charlen{0};
         for (size_t i = 0; i < slen; i += charlen) {
-          int code = ccedar::unicode(it.first.c_str(), charlen);
+          int code = ccedar::unicode(it.first.c_str() + i, charlen);
           ikey.push_back(code);
         }
 
@@ -162,10 +162,6 @@ class CedarTrieTokenizer {
 
   bool encode(const std::string &s, std::vector<int> &output_ids) {
 
-    if (_use_codepoint) {
-      return _encode_codepoint(s, output_ids);
-    }
-
     std::vector<int> dst;
 
     if (s.empty()) {
@@ -174,63 +170,38 @@ class CedarTrieTokenizer {
 
     const size_t s_len = s.size();
 
-    size_t char_idx = 0;
-    int prev_id = -1;  // Track previously matched result.
-    size_t key_size = 0;
+    for (size_t i = 0; i < s_len;) {
 
-    // Find match for each UTF-8 character,
-    while ((char_idx + key_size) < s_len) {
-
-      uint32_t charlen = utf8_len(s[char_idx]);
-      if (charlen == 0) {
+      uint32_t char_len = utf8_len(s[i]);
+      if (char_len == 0) {
         // Found invalid UTF-8 string.
         return false;
       }
-      key_size += charlen;
 
-      int  ret = _cda.exactMatchSearch<int>(&s[char_idx], key_size);
+      int32_t token_id;
+      uint32_t key_size;
 
-      if (ret > 65535) {
-        // ??? internal error in exactMatchSearch?
-        return false;
-      }
-
-      if (ret < 1) { // no match.
-        if (prev_id > 0) {
-          // prev_id = id of longest matched key
-          dst.push_back(prev_id);
-
-          // pop current UTF-8 character.
-          key_size -= charlen;
-
-        } else {
-          // UTF-8 byte fallback
-          // Should be single UTF-8 character
-          if (key_size != charlen) {
-            // This should not happen. Just in case.
-            return false;
-          }
-
-          for (size_t i = 0; i < charlen; i++) {
-            dst.push_back(int(uint8_t(s[char_idx + i])) +
-                          _utf8_id_offset);
-          }
-        }
-
-        prev_id = -1;
-
-        char_idx += key_size;
-        key_size = 0;
+      int ret;
+      if (_use_codepoint) {
+        ret = _ilongestPrefixSearch(s.c_str(), i, s_len, token_id, key_size);
       } else {
-        prev_id = ret;
-
-        // Continue search
+        ret = _longestPrefixSearch(s.c_str(), i, s_len, token_id, key_size);
       }
-    }
 
-    // Remainder
-    if (prev_id) {
-      dst.push_back(prev_id);
+      if (ret) {
+        dst.push_back(token_id);
+        i += key_size;
+      } else {
+
+        // UTF-8 byte fallback
+        // Should be single UTF-8 character
+
+        for (size_t c = 0; c < char_len; c++) {
+          dst.push_back(int(uint8_t(s[i + c])) +
+                        _utf8_id_offset);
+        }
+        i += char_len;
+      }
     }
 
     output_ids = dst;
@@ -283,16 +254,15 @@ class CedarTrieTokenizer {
   itrie_t _ida; // int key
   trie_t _cda; // char key
 
-  bool _longestPrefixSearch(const char *s, const size_t s_offset, const size_t s_len, int &found_id, int &keylen) {
+  bool _longestPrefixSearch(const char *s, const size_t s_offset, const size_t s_len, int &found_id, uint32_t &keylen) {
 
     size_t prev_from{0};
     int prev_n{-1};
 
     size_t from{0};
-    int loc{0};
     for (size_t i = s_offset; i < s_len; i++) {
       size_t pos = 0;
-      // process 1 char(item) each.
+      // process 1 char each.
       int n = _cda.traverse(&s[i], from, /* inout */pos, /* len */1);
       if (n == trie_t::CEDAR_NO_VALUE) {
         continue;
@@ -312,20 +282,20 @@ class CedarTrieTokenizer {
 
     if ((prev_n > 0) && _id_to_str_map.count(prev_n)) {
       found_id = prev_n;
-      keylen = _id_to_str_map.at(prev_n).size();
+      keylen = uint32_t(_id_to_str_map.at(prev_n).size());
       return true;
     }
 
     return false;
   }
 
-  bool _ilongestPrefixSearch(const char *s, const size_t s_offset, const size_t s_len, int &found_id, int &keylen) {
+  bool _ilongestPrefixSearch(const char *s, const size_t s_offset, const size_t s_len, int &found_id, uint32_t &keylen) {
 
     size_t prev_from{0};
     int prev_n{-1};
+    int prev_code{0};
 
     size_t from{0};
-    int loc{0};
     int char_len{0};
     for (size_t i = s_offset; i < s_len; i += char_len) {
       size_t pos = 0;
@@ -339,9 +309,12 @@ class CedarTrieTokenizer {
 
       // process codepoint value each.
       int n = _ida.traverse(&code, from, /* inout */pos, /* len */1);
+
       if (n == trie_t::CEDAR_NO_VALUE) {
         continue;
       }
+
+      prev_code = code;
       if (n == trie_t::CEDAR_NO_PATH) {
         break;
       }
@@ -357,83 +330,11 @@ class CedarTrieTokenizer {
 
     if ((prev_n > 0) && _id_to_str_map.count(prev_n)) {
       found_id = prev_n;
-      keylen = _id_to_str_map.at(prev_n).size();
+      keylen = uint32_t(_id_to_str_map.at(prev_n).size());
       return true;
     }
 
     return false;
-  }
-
-  bool _encode_codepoint(const std::string &s, std::vector<int> &output_ids) {
-    std::vector<int> codepoints;
-    std::vector<int> dst;
-
-    if (s.empty()) {
-      return true;
-    }
-
-    const size_t s_len = s.size();
-
-    size_t char_idx = 0;
-    int prev_id = -1;  // Track previously matched result.
-    int char_len = 0;
-
-    // Find match for UTF codepoint representation of input string.
-
-    while ((char_idx + char_len) < s_len) {
-
-      int code = ccedar::unicode(&s[char_idx], char_len);
-      if (char_len == 0) {
-        std::cerr << "charlen is 0.\n";
-        // invalid
-        return false;
-      }
-
-      codepoints.push_back(code);
-
-      int ret = _ida.exactMatchSearch<int>(codepoints.data(), codepoints.size());
-
-      if (ret > 65535) {
-        std::cerr << "exactMatchSearch failed. ret = " << ret  << "\n";
-        // ???
-        return false;
-      }
-
-      if (ret < 1) {
-        if (prev_id > 0) {
-          // prev_id = id of longest matched key
-          dst.push_back(prev_id);
-
-          // pop last UTF-8 char
-          char_idx -= char_len;
-
-        } else {
-          // UTF-8 byte fallback
-          for (size_t i = 0; i < char_len; i++) {
-            dst.push_back(int(uint8_t(s[char_idx + i])) +
-                          _utf8_id_offset);
-          }
-        }
-        codepoints.clear();
-
-        prev_id = -1;
-
-      } else {
-        prev_id = ret;
-
-        // Continue search
-      }
-
-      char_idx += char_len;
-    }
-
-    // Remainder
-    if (prev_id) {
-      dst.push_back(prev_id);
-    }
-
-    output_ids = dst;
-    return true;
   }
 
   bool _use_codepoint{false}; // Use Unicode codepoint to represent string instead of UTF-8 byte?
