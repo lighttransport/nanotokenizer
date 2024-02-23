@@ -283,6 +283,87 @@ class CedarTrieTokenizer {
   itrie_t _ida; // int key
   trie_t _cda; // char key
 
+  bool _longestPrefixSearch(const char *s, const size_t s_offset, const size_t s_len, int &found_id, int &keylen) {
+
+    size_t prev_from{0};
+    int prev_n{-1};
+
+    size_t from{0};
+    int loc{0};
+    for (size_t i = s_offset; i < s_len; i++) {
+      size_t pos = 0;
+      // process 1 char(item) each.
+      int n = _cda.traverse(&s[i], from, /* inout */pos, /* len */1);
+      if (n == trie_t::CEDAR_NO_VALUE) {
+        continue;
+      }
+      if (n == trie_t::CEDAR_NO_PATH) {
+        break;
+      }
+
+      prev_n = n;
+
+      if (prev_from == from) {
+        // guess exactMatch.
+        break;
+      }
+      prev_from = from;
+    }
+
+    if ((prev_n > 0) && _id_to_str_map.count(prev_n)) {
+      found_id = prev_n;
+      keylen = _id_to_str_map.at(prev_n).size();
+      return true;
+    }
+
+    return false;
+  }
+
+  bool _ilongestPrefixSearch(const char *s, const size_t s_offset, const size_t s_len, int &found_id, int &keylen) {
+
+    size_t prev_from{0};
+    int prev_n{-1};
+
+    size_t from{0};
+    int loc{0};
+    int char_len{0};
+    for (size_t i = s_offset; i < s_len; i += char_len) {
+      size_t pos = 0;
+
+      int code = ccedar::unicode(&s[i], char_len);
+      if (char_len == 0) {
+        std::cerr << "charlen is 0.\n";
+        // invalid
+        return false;
+      }
+
+      // process codepoint value each.
+      int n = _ida.traverse(&code, from, /* inout */pos, /* len */1);
+      if (n == trie_t::CEDAR_NO_VALUE) {
+        continue;
+      }
+      if (n == trie_t::CEDAR_NO_PATH) {
+        break;
+      }
+
+      prev_n = n;
+
+      if (prev_from == from) {
+        // guess exactMatch.
+        break;
+      }
+      prev_from = from;
+    }
+
+    if ((prev_n > 0) && _id_to_str_map.count(prev_n)) {
+      found_id = prev_n;
+      keylen = _id_to_str_map.at(prev_n).size();
+      return true;
+    }
+
+    return false;
+  }
+
   bool _encode_codepoint(const std::string &s, std::vector<int> &output_ids) {
     std::vector<int> codepoints;
     std::vector<int> dst;

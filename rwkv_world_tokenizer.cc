@@ -2,7 +2,7 @@
 
 /*!
  *  Copyright (c) 2023 by Contributors
- *  
+ *
  *  Modification by (C) 2024 - Present, Light Transport Entertainment Inc.
  * \file rwkv_world_tokenizer.cpp
  * \brief Implementation of llm chat.
@@ -14,7 +14,7 @@
 #include <unordered_map>
 #include <memory>
 #include <fstream>
-#include <optional>
+//#include <optional>
 #include <sstream>
 #include <vector>
 //#include <msgpack.hpp>
@@ -24,7 +24,7 @@ namespace tokenizers {
 struct TrieTree {
   std::unordered_map<int, std::unique_ptr<TrieTree>> children;
   std::string word;
-  std::optional<int> token_id;
+  int token_id{-1}; // -1 = invalid
 
   TrieTree(const std::unordered_map<std::string, int>& word2id) {
     for (auto& pair : word2id) {
@@ -42,14 +42,21 @@ struct TrieTree {
         break;
       }
       node = it->second.get();
-      RV_CHECK(node != nullptr);
-      if (node->token_id.has_value()) {
+      if (!node) {
+        // invalid
+        return {"", -1};
+      }
+      if (node->token_id >= 0) {
         prefix = node->word;
-        token_id = node->token_id.value();
+        token_id = node->token_id;
       }
     }
-    RV_CHECK(!prefix.empty());
-    RV_CHECK(token_id != -1);
+    if (prefix.empty()) {
+      return {"", -1};
+    }
+    if (token_id == -1) {
+      return {"", -1};
+    }
     return {prefix, token_id};
   }
 
@@ -100,24 +107,32 @@ class RWKVWorldTokenizer {
     _tree = std::make_unique<TrieTree>(_word2idx);
   }
 
-  std::vector<int32_t> Encode(const std::string& str) {
+  bool encode(const std::string &str, std::vector<int32_t> &dst) {
     std::vector<int> ids;
     int str_idx = 0;
 
     while (str_idx < str.size()) {
-      auto [prefix, token_id] = _tree->find_longest_prefix(str.substr(str_idx));
-      ids.push_back(token_id);
-      str_idx += prefix.size();
+      const auto ret = _tree->find_longest_prefix(str.substr(str_idx));
+      if (ret.first.empty()) {
+        return false;
+      }
+      if (ret.second == -1) {
+        return false;
+      }
+      ids.push_back(ret.second);
+      str_idx += ret.first.size();
     }
-    return ids;
+    dst = ids;
+    return true;
   }
 
-  std::string Decode(const std::vector<int32_t>& ids) {
+  bool decode(const std::vector<int32_t>& ids, std::string &dst) {
     std::string str;
     for (auto id : ids) {
       str += IdToToken(id);
     }
-    return str;
+    dst = str;
+    return true;
   }
 
   size_t GetVocabSize() {
