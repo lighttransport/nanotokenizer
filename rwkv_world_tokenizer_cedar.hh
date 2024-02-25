@@ -24,9 +24,6 @@ class CedarTrieTokenizer {
     // free memory in cedar
     if (_use_codepoint) {
       _ida.clear(/* reuse */false);
-      if (_ida.array()) {  // work around for _array is not free'ed in ccedar
-        std::free(const_cast<void *>(_ida.array()));
-      }
     } else {
       _cda.clear(/* reuse */ false);
       if (_cda.array()) {  // work around for _array is not free'ed in ccedar
