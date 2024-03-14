@@ -616,9 +616,9 @@ class ParseOption {
 
 };
 
-class ParseOptionText {
+class ParseTextOption {
  public:
-  ParseOptionText()
+  ParseTextOption()
       : req_num_threads(-1),
         ignore_header(false),
         verbose(false),
@@ -699,7 +699,7 @@ bool ParseCSVFromFile(const std::string &filename, const ParseOption<T> &option,
 /// @return true upon success. false when error happens during parsing.
 ///
 template <typename T>
-bool ParseTextCSVFromFile(const std::string &filename, const ParseOptionStr &option,
+bool ParseTextCSVFromFile(const std::string &filename, const ParseTextOption &option,
                       TextCSV *csv, std::string *warn, std::string *err);
 
 #endif
@@ -862,9 +862,13 @@ static inline bool is_line_ending(const char *p, size_t i, size_t end_i) {
 }
 
 
-static bool parse_string(const char *p, const size_t len, char delimiter, std::string &out_token, size_t &out_loc, char quote_char = '"')
+#if 0 // not used a.t.m.
+static bool parse_string(const char *p, const size_t len, char delimiter, std::string &out_token, size_t &out_loc, char quote_char = '"', std::string *err = nullptr)
 {
   if (len == 0) {
+    if (err) {
+      (*err) += "(parse_string) Input length is zero.\n";
+    }
     return false;
   }
 
@@ -875,6 +879,9 @@ static bool parse_string(const char *p, const size_t len, char delimiter, std::s
 
     if (is_line_ending(p, i, len - 1)) {
       if ((quote_count % 2) != 0) {
+        if (err) {
+          (*err) += "(parse_string) The number of quote chars is odd.\n";
+        }
         return false;
       }
       out_token = std::string(p + s_start, i - s_start);
@@ -885,6 +892,9 @@ static bool parse_string(const char *p, const size_t len, char delimiter, std::s
     if (p[i] == quote_char) {
       // 3 or more quote chars are not allowed.
       if (quote_count > 2) {
+        if (err) {
+          (*err) += "(parse_string) The number of quote chars > 2.\n";
+        }
         return false;
       }
 
@@ -903,6 +913,9 @@ static bool parse_string(const char *p, const size_t len, char delimiter, std::s
   }
 
   if (quote_count % 2 != 0) {
+    if (err) {
+      (*err) += "(parse_string) The number of quote chars is odd.\n";
+    }
     return false;
   }
 
@@ -911,10 +924,14 @@ static bool parse_string(const char *p, const size_t len, char delimiter, std::s
 
   return true;
 }
+#endif
 
-bool ParseLineStr(const char *p, const size_t p_len, StackVector<std::string, 512> *values,
-               const ParseOptionStr &option) {
+bool ParseLineText(const char *p, const size_t p_len, StackVector<std::string, 512> *values,
+               const ParseTextOption &option, std::string *err) {
   if ((p == nullptr) || (p_len < 1)) {
+    if (err) {
+      (*err) += "Invalid arg or input is empty.\n";
+    }
     return false;
   }
 
@@ -930,9 +947,10 @@ bool ParseLineStr(const char *p, const size_t p_len, StackVector<std::string, 51
     }
   }
 
-  if (p[0] == '#') {  // comment line
-    return false;
-  }
+  // No comment line handling in Text CSV.
+  //if (p[0] == '#') {  // comment line
+  //  return false;
+  //}
 
   (*values)->clear();
 
@@ -943,11 +961,30 @@ bool ParseLineStr(const char *p, const size_t p_len, StackVector<std::string, 51
     }
 
     // find delimiter
+    uint32_t quote_char_count = 0;
     size_t delimiter_loc = loc;
     for (size_t i = loc; i < p_len; i++, delimiter_loc++) {
-      if ((p[i] == option.delimiter) || (p[i] == '\0')) {
+      if ((((quote_char_count % 2) == 0) && p[i] == option.delimiter) || (p[i] == '\0')) {
         break;
       }
+      if (p[i] == '"') {
+        if (quote_char_count > 2) {
+          if (err) {
+            (*err) += "Too many quote char(\") in a field.\n";
+          }
+          return false;
+        }
+
+        quote_char_count++;
+      }
+    }
+
+    if (quote_char_count == 1) {
+      // no closing quote. e.g.: "hello\n
+      if (err) {
+        (*err) += "String is not correctly quoted.\n";
+      }
+      return false;
     }
 
     if (loc == delimiter_loc) {
@@ -986,9 +1023,11 @@ bool ParseLineStr(const char *p, const size_t p_len, StackVector<std::string, 51
 
     {
       std::string token;
-      size_t loc_after_parsed; // ignore
-      if (parse_string(p + loc, delimiter_loc - loc, option.delimiter, token, loc_after_parsed)) {
-        return false;
+      if (quote_char_count == 2) {
+        // remove quote char.
+        token = std::string(p + loc + 1, delimiter_loc - loc - 1);
+      } else {
+        token = std::string(p + loc, delimiter_loc - loc);
       }
 
       (*values)->push_back(token);
@@ -1029,12 +1068,16 @@ bool ParseLineStr(const char *p, const size_t p_len, StackVector<std::string, 51
     return true;
   }
 
+  if (err) {
+    (*err) += "Input is invalid.\n";
+  }
   return false;
 }
 
 typedef struct {
-  size_t pos;
-  size_t len;
+  size_t pos; // Byte offset in input bytes.
+  size_t len; // The number of bytes
+
 } LineInfo;
 
 // Idea come from https://github.com/antonmks/nvParse
@@ -1313,7 +1356,6 @@ bool ParseCSVFromMemory(const char *_buffer, const size_t _buffer_length,
             continue;
           }
 
-          // TODO(LTE): parse header string
           bool ret = ParseLine(&buffer[line_infos[t][i].pos],
                                line_infos[t][i].len, &values, option);
 
@@ -1471,7 +1513,7 @@ bool ParseCSVFromMemory(const char *_buffer, const size_t _buffer_length,
 }
 
 bool ParseTextCSVFromMemory(const char *_buffer, const size_t _buffer_length,
-                        const ParseOptionText &option, TestCSV *csv,
+                        const ParseTextOption &option, TextCSV *csv,
                         std::string *warn, std::string *err) {
   if (_buffer_length < 1) {
     if (err) {
@@ -1620,7 +1662,7 @@ bool ParseTextCSVFromMemory(const char *_buffer, const size_t _buffer_length,
   // 2. allocate per thread buffer
   auto t_alloc_start = std::chrono::high_resolution_clock::now();
 
-  std::vector<std::vector<T>> line_buffer;
+  std::vector<std::vector<std::string>> line_buffer;
   line_buffer.resize(size_t(num_threads));
   {
     for (size_t t = 0; t < size_t(num_threads); t++) {
@@ -1634,6 +1676,8 @@ bool ParseTextCSVFromMemory(const char *_buffer, const size_t _buffer_length,
   // Records # of fields per thread.
   // After finishing parsing, check if these values are all same.
   std::vector<int> num_fields_per_thread(size_t(num_threads), -1);
+  std::vector<std::string> tls_errs;
+  tls_errs.resize(size_t(num_threads));
 
   // 3. parse each line in parallel.
   {
@@ -1647,7 +1691,7 @@ bool ParseTextCSVFromMemory(const char *_buffer, const size_t _buffer_length,
 
         bool first_line = true;
         for (size_t i = 0; i < line_infos[t].size(); i++) {
-          StackVector<T, 512> values;
+          StackVector<std::string, 512> values;
 
           if (line_infos[t][i].len < 1) {
             // Empty line. skip
@@ -1666,9 +1710,8 @@ bool ParseTextCSVFromMemory(const char *_buffer, const size_t _buffer_length,
             continue;
           }
 
-          // TODO(LTE): parse header string
-          bool ret = ParseLine(&buffer[line_infos[t][i].pos],
-                               line_infos[t][i].len, &values, option);
+          bool ret = ParseLineText(&buffer[line_infos[t][i].pos],
+                               line_infos[t][i].len, &values, option, &tls_errs[t]);
 
           if (ret) {
             if (num_fields_per_thread[t] == -1) {
@@ -1705,6 +1748,23 @@ bool ParseTextCSVFromMemory(const char *_buffer, const size_t _buffer_length,
       return false;
     }
   }
+
+  {
+    bool has_tls_err = false;
+    for (size_t t = 0; t < tls_errs.size(); t++) {
+      if (tls_errs[t].size()) {
+        if (err) {
+          (*err) += tls_errs[t];
+        }
+        has_tls_err = true;
+      }
+    }
+
+    if (has_tls_err) {
+      return false;
+    }
+  }
+
 
   // Check if all records have same the number of fields.
   //for (size_t i = 0; i < num_fields_per_thread.size(); i++) {
@@ -1786,17 +1846,11 @@ bool ParseTextCSVFromMemory(const char *_buffer, const size_t _buffer_length,
 
     csv->values.resize(csv->num_fields * csv->num_records);
 
-    StackVector<std::thread, kMaxThreads> workers;
-
+    offset = 0;
     for (size_t t = 0; t < size_t(num_threads); t++) {
-      workers->push_back(std::thread([&, t]() {
-        memcpy(csv->values.data() + offset_table[t], line_buffer[t].data(),
-               sizeof(T) * line_buffer[t].size());
-      }));
-    }
-
-    for (size_t t = 0; t < workers->size(); t++) {
-      workers[t].join();
+      for (size_t k = 0; k < line_buffer[t].size(); k++) {
+        csv->values[offset + k] = line_buffer[t][k];
+      }
     }
 
     auto t_end = std::chrono::high_resolution_clock::now();
@@ -1855,8 +1909,7 @@ bool ParseCSVFromFile(const std::string &filename, const ParseOption<T> &option,
   return ParseCSVFromMemory(buffer.data(), sz, option, csv, warn, err);
 }
 
-template <typename T>
-bool ParseTextCSVFromFile(const std::string &filename, const ParseOptionStr &option,
+bool ParseTextCSVFromFile(const std::string &filename, const ParseTextOption &option,
                       TextCSV *csv, std::string *warn, std::string *err) {
 
   std::ifstream ifs(filename);
