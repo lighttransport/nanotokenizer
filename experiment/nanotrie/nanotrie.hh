@@ -6,6 +6,9 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <array>
+
+#include "nanohashmap.hh"
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -13,6 +16,9 @@
 #endif
 
 // Simple array repsentation of Trie tree.
+//
+// Up to 2GB items.
+//
 // TODO:
 // - [ ] Support std::string_view(Use alternative implementation of string_view
 // for < C++17)
@@ -36,6 +42,22 @@
 
 namespace nanotrie {
 
+template<typename KeyType>
+inline bool has_prefix(const KeyType *s, const size_t s_len, const KeyType *prefix, const size_t prefix_len){
+  if (s_len < prefix_len) {
+    return false;
+  }
+
+  // TODO: Use memcmp for faster compare?
+  for (size_t i = 0; i < prefix_len; i++) {
+    if (s[i] != prefix[i]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 // Usualy KeyType = const char(const char *) or uint(UTF-8 codepoint)
 template <typename KeyType, typename ValueType>
 class Trie {
@@ -53,9 +75,15 @@ class Trie {
   };
 
   struct inode {
-    ValueType offset{0};  // offset or value
-    int parent{-1};       // parent node id(up to 2GB). -1 = root
+    //ValueType offset{0}; // offset or value
+    uint32_t offset_to_hashes{0}; // array index to `hashes`
+    // < -1 : leaf node
+    // -1 or > 0 : has child
+    // >= 0 : has sibling(index to sibling(neighbor) node)
+    int jump{-1};
   };
+
+  std::vector<TokenHashMap<KeyType, ValueType, 64>> hashes;
 
   static_assert(sizeof(inode) == (sizeof(ValueType) + sizeof(int32_t)),
                 "inode struct must be tightly packed.");
@@ -93,6 +121,90 @@ class Trie {
     (void)keys;
     (void)key_lens;
     (void)values;
+
+    // right_idx is exclusive
+    // return false when invalid left_idx/right_idx combination.
+    auto get_next_subtree = [&keys, &key_lens](const uint32_t left_idx, const uint32_t right_idx, uint32_t &subtree_idx) -> bool {
+
+      if (left_idx >= right_idx) {
+        return false;
+      }
+
+      uint32_t i = left_idx + 1;
+      for (; i < right_idx; i++) {
+        if (!has_prefix(keys[i], key_lens[i], keys[right_idx], key_lens[right_idx])) {
+          subtree_idx = i;
+          return true;
+        }
+      }
+
+      subtree_idx = i;
+      return true;
+    };
+
+    if (num_keys == 0) {
+      return false;
+    }
+
+    uint32_t end_idx = num_keys; // end_idx is exclusive
+    uint32_t curr_idx = 0;
+
+    for (uint32_t next_idx = curr_idx; curr_idx < end_idx; curr_idx = next_idx) {
+
+      uint32_t next_subtree_idx;
+      if (!get_next_subtree(curr_idx, end_idx, next_subtree_idx)) {
+        PUSH_ERROR_AND_RETURN("keys are not sorted.");
+      }
+
+      next_idx++;
+
+
+      bool has_child{false};
+      bool has_sibling{false};
+
+      if (next_subtree_idx > num_keys) {
+        // Just in case
+        PUSH_ERROR_AND_RETURN("Invalid next_subtree_idx.");
+      }
+
+      if (next_idx != next_subtree_idx) {
+
+        if (next_idx > num_keys) {
+          // Just in case
+          PUSH_ERROR_AND_RETURN("Invalid next_idx.");
+        }
+
+
+        // TODO: has_child
+      }
+
+      if (next_subtree_idx != end_idx) {
+
+        // TODO: has_sibling
+
+      }
+
+
+      uint32_t prev_idx = curr_idx;
+
+      if (has_child) {
+        uint32_t next_idx_out;
+
+
+      }
+
+      if (has_sibling && has_child) {
+        jumps[prev_idx] = int32_t(curr_idx - prev_idx);
+      } else if (has_sibling) {
+        jumps[prev_idx] = 0;
+      } else if (has_child) {
+        jumps[prev_idx] = -1;
+      } else {
+        jumps[prev_idx] = -2; // leaf node
+      }
+
+    }
+
 
     PUSH_ERROR_AND_RETURN("TODO");
   }
@@ -132,6 +244,8 @@ class Trie {
   // right_index is inclusive
   bool build_tree_rec_impl(const size_t depth, const node &parent,
     size_t left_index, size_t right_index, std::string *err) {
+
+    (void)parent;
 
     if (left_index >= _input_size) {
       PUSH_ERROR_AND_RETURN("index out-of-range.");
@@ -196,7 +310,7 @@ class Trie {
         return false;
       }
     }
-    
+
     return true;
   }
 
