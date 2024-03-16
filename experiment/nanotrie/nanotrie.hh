@@ -74,6 +74,9 @@ class Trie {
     std::vector<node> children;
   };
 
+  static constexpr int32_t kLeafNode = -2;
+  static constexpr int32_t kSingleTokenIntermediateNode = -1;
+
   struct inode {
     //ValueType offset{0}; // offset or value
     uint32_t offset_to_hashes{0}; // array index to `hashes`
@@ -117,11 +120,65 @@ class Trie {
   bool build(const size_t num_keys, const KeyType *keys[],
              const size_t *key_lens, const ValueType *values,
              std::string *err = nullptr) {
-    (void)num_keys;
-    (void)keys;
-    (void)key_lens;
-    (void)values;
 
+    node root;
+    std::vector<int32_t> jumps;
+    jumps.assign(num_keys, kLeafNode);
+
+    return build_tree_rec_impl(keys, key_lens, values, 0, root, 0, num_keys - 1, jumps, err);
+  }
+
+  ///
+  /// Deserialize Trie data from bytes.
+  /// Do validation of byte data
+  ///
+  bool deserialize(const uint8_t *data, const size_t nbytes);
+
+  ///
+  /// Do exact match search.
+  ///
+  ValueType exactMatchSearch(const KeyType *key, size_t key_len,
+                             size_t node_pos = 0);
+
+#if 0  // TODO
+  ///
+  /// Do common prefix search.
+  ///
+  size_t commonPrefixSearch(const KeyType *key, size_t key_len, ValueType *results, size_t num_results, size_t node_pos = 0);
+
+  ///
+  /// Do traverseh.
+  ///
+  ValueType traverse(const KeyType *key, size_t key_len, size_t &node_pos, size_t &key_pos);
+#endif
+
+ private:
+  std::vector<uint8_t> _data;
+  size_t _input_size{0};
+
+  size_t *_key_lens{nullptr};
+  KeyType *_keys{nullptr};
+  size_t *_values{nullptr};
+
+
+  // NOTE: right_index is inclusive
+  bool build_tree_rec_impl(
+    const KeyType *keys[], const size_t *key_lens, const ValueType *values,
+    const size_t depth, const node &parent,
+    const uint32_t curr_index,
+    const uint32_t left_index, const uint32_t right_index,
+    uint32_t &next_index_out,
+    std::vector<int32_t> &jumps, std::string *err) {
+
+    //
+    // Type of node is based on # of siblings and has child or not.
+    // 
+    // - Terminal(leaf node): 
+    // - No siblings but has child: Create node with single token.
+    // - Small # of siblings: Use simple array and do linear search.
+    // - Other: Use tokenhashmap.
+    //
+   
     // right_idx is exclusive
     // return false when invalid left_idx/right_idx combination.
     auto get_next_subtree = [&keys, &key_lens](const uint32_t left_idx, const uint32_t right_idx, uint32_t &subtree_idx) -> bool {
@@ -142,17 +199,19 @@ class Trie {
       return true;
     };
 
-    if (num_keys == 0) {
+    if (right_index > left_index) {
       return false;
     }
 
-    uint32_t end_idx = num_keys; // end_idx is exclusive
-    uint32_t curr_idx = 0;
+    size_t n = right_index - left_index;
 
-    for (uint32_t next_idx = curr_idx; curr_idx < end_idx; curr_idx = next_idx) {
+    uint32_t end_index = right_index + 1; // end is exclusive
+    uint32_t parent_index = left_index;
+
+    for (uint32_t next_idx = parent_index; parent_index < end_index; parent_index = next_idx) {
 
       uint32_t next_subtree_idx;
-      if (!get_next_subtree(curr_idx, end_idx, next_subtree_idx)) {
+      if (!get_next_subtree(parent_index, end_index, next_subtree_idx)) {
         PUSH_ERROR_AND_RETURN("keys are not sorted.");
       }
 
@@ -162,14 +221,14 @@ class Trie {
       bool has_child{false};
       bool has_sibling{false};
 
-      if (next_subtree_idx > num_keys) {
+      if (next_subtree_idx > right_index) {
         // Just in case
         PUSH_ERROR_AND_RETURN("Invalid next_subtree_idx.");
       }
 
       if (next_idx != next_subtree_idx) {
 
-        if (next_idx > num_keys) {
+        if (next_idx > right_index) {
           // Just in case
           PUSH_ERROR_AND_RETURN("Invalid next_idx.");
         }
@@ -207,109 +266,6 @@ class Trie {
 
 
     PUSH_ERROR_AND_RETURN("TODO");
-  }
-
-  ///
-  /// Deserialize Trie data from bytes.
-  /// Do validation of byte data
-  ///
-  bool deserialize(const uint8_t *data, const size_t nbytes);
-
-  ///
-  /// Do exact match search.
-  ///
-  ValueType exactMatchSearch(const KeyType *key, size_t key_len,
-                             size_t node_pos = 0);
-
-#if 0  // TODO
-  ///
-  /// Do common prefix search.
-  ///
-  size_t commonPrefixSearch(const KeyType *key, size_t key_len, ValueType *results, size_t num_results, size_t node_pos = 0);
-
-  ///
-  /// Do traverseh.
-  ///
-  ValueType traverse(const KeyType *key, size_t key_len, size_t &node_pos, size_t &key_pos);
-#endif
-
- private:
-  std::vector<uint8_t> _data;
-  size_t _input_size{0};
-
-  size_t *_key_lens{nullptr};
-  KeyType *_keys{nullptr};
-  size_t *_values{nullptr};
-
-  // right_index is inclusive
-  bool build_tree_rec_impl(const size_t depth, const node &parent,
-    size_t left_index, size_t right_index, std::string *err) {
-
-    (void)parent;
-
-    if (left_index >= _input_size) {
-      PUSH_ERROR_AND_RETURN("index out-of-range.");
-    }
-
-    if (right_index >= _input_size) {
-      PUSH_ERROR_AND_RETURN("index out-of-range.");
-    }
-
-    if (right_index <= left_index) {
-      PUSH_ERROR_AND_RETURN("internal error.");
-    }
-
-    size_t curr_depth = _key_lens[left_index];
-    if (curr_depth != depth) {
-      PUSH_ERROR_AND_RETURN("keys are not lexicographically sorted.");
-    }
-
-    size_t child_depth = depth + 1;
-    size_t child_left = left_index;
-    size_t child_right = right_index;
-
-    // find child_left
-    for (size_t i = left_index; i <= right_index; i++) {
-
-      if (_key_lens[i] < depth) {
-        PUSH_ERROR_AND_RETURN("keys are not lexicographically sorted.");
-        continue;
-      }
-
-      // skip until length change.
-      if (_key_lens[i] == depth) {
-        continue;
-      }
-
-      child_left = i;
-      child_depth = _key_lens[i];
-      break;
-    }
-
-    // find sibling_right
-    for (size_t i = child_left; i <= right_index; i++) {
-
-      if (_key_lens[i] < child_depth) {
-        PUSH_ERROR_AND_RETURN("keys are not lexicographically sorted.");
-        continue;
-      }
-
-      // skip until length change.
-      if (_key_lens[i] == child_depth) {
-        continue;
-      }
-
-      child_right = i;
-      break;
-    }
-
-    if (child_right - child_left > 0) {
-      // recurse
-      node child; // TODO
-      if (!build_tree_rec_impl(child_depth, child, child_left, child_right, err)) {
-        return false;
-      }
-    }
 
     return true;
   }
