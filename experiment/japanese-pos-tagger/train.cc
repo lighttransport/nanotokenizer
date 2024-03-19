@@ -28,7 +28,8 @@ enum class CharKind {
   KIND_OTHER = 3,  // Kanji, hiragana, emoji, etc.
 };
 
-inline uint32_t utf8_len(const uint8_t c) {
+inline uint32_t utf8_len(const char c_) {
+  const uint8_t c = uint8_t(c_);
   if (c <= 127) {
     // ascii
     return 1;
@@ -130,6 +131,27 @@ struct StrIdMap {
     return true;
   }
 
+  // assign id automatically
+  bool put(const std::string &str, int &result) {
+    if (str_to_id.count(str)) {
+      result = str_to_id.at(str);
+      return true;
+    }
+
+    size_t id = id_to_str.size();
+
+    if (id < (std::numeric_limits<int>::max)()) {
+      return false;
+    }
+
+    str_to_id[str] = int(id);
+    id_to_str[int(id)] = str;
+
+    result = id;
+
+    return true;
+  }
+
   void add(const std::string &str, int val) {
     str_to_id[str] = val;
     id_to_str[val] = str;
@@ -148,7 +170,7 @@ struct StrIdMap {
     return false;
   }
 
-  bool get(int &id, std::string &result) const {
+  bool get(const int id, std::string &result) const {
     if (id_to_str.count(id)) {
       result = id_to_str.at(id);
       return true;
@@ -214,14 +236,14 @@ inline std::vector<std::string> parse_line(const char *p, const size_t len,
     return tokens;
   }
 
-  size_t quote_size = utf8_len(uint8_t(quote_char[0]));
+  size_t quote_size = utf8_len(quote_char[0]);
 
   bool in_quoted_string = false;
   size_t s_start = 0;
 
   const char *curr_p = p;
 
-  for (size_t i = 0; i < len; i += utf8_len(uint8_t(*curr_p))) {
+  for (size_t i = 0; i < len; i += utf8_len(*curr_p)) {
     curr_p = &p[i];
 
     if (is_line_ending(p, i, len - 1)) {
@@ -263,8 +285,37 @@ inline std::vector<std::string> parse_line(const char *p, const size_t len,
   return tokens;
 }
 
+// Test if chars in input string has all the same charkind.
+// If not, return KIND_OTHER,
+static inline CharKind classify_char_kind(const std::string &s,
+  const StrIdMap &chars_table) {
+
+  int prev_kind{-1};
+  
+  uint32_t char_len{0};
+  for (size_t i = 0; i < s.size(); i += char_len) {
+    std::string u8_char = extract_utf8_char(s, i, char_len);
+
+    int kind{-1};
+    if (!chars_table.get(u8_char, kind)) {
+      return CharKind::KIND_OTHER;
+    }
+
+    if (i > 0) {
+      if (prev_kind != kind) {
+        return CharKind::KIND_OTHER;
+      }
+    }
+
+    prev_kind = kind;
+  }
+
+  return static_cast<CharKind>(prev_kind);
+}
+
 struct token_and_pos_tag {
-  std::string token;
+  //std::string token;
+  int token_len{-1};
   int pos_id{-1};
   int feature_id{-1};
 };
@@ -277,8 +328,14 @@ bool train(const std::vector<std::string> &lines,
   StrIdMap feature_table;
   StrIdMap word_table;
 
+  // Maximum word length(in bytes) in vocab.
+  size_t max_word_length = 0;
+
   // key: feature_id, value: counts
   std::map<int, int> feature_counts;
+
+  // key: pos_id, value: counts
+  std::map<int, int> pos_counts;
 
   // key: word_id, value = (key: POS_id, value = feature_id)
   std::map<int, std::map<int, int>> word_to_pos_and_feature_map;
@@ -299,6 +356,8 @@ bool train(const std::vector<std::string> &lines,
       std::cerr << "Too many words.\n";
       return false;
     }
+
+    max_word_length = (std::max)(surface.size(), max_word_length);
 
     int word_id;
     if (!word_table.get(surface, word_id)) {
@@ -329,7 +388,7 @@ bool train(const std::vector<std::string> &lines,
     }
 
     int feature_id;
-    if (!feature_table.get(feature, pos_id)) {
+    if (!feature_table.get(feature, feature_id)) {
       std::cerr << "Internal error: feature " << feature
                 << " not found in the table.\n";
       return false;
@@ -337,6 +396,8 @@ bool train(const std::vector<std::string> &lines,
 
     word_to_pos_and_feature_map[word_id][pos_id] = feature_id;
   }
+
+  std::cout << "Max word length: " << max_word_length << "\n";
 
   // Register base characters.
   uint32_t char_len = 0;
@@ -372,14 +433,151 @@ bool train(const std::vector<std::string> &lines,
 
   std::vector<token_and_pos_tag> tokens;
 
+  // 0: word_id, 1: feature_id, 2: word length
+  std::vector<std::array<int, 3>> pis;
+  std::string sentence;
+
+  // key = word_id, value = (key = feature_id, value = (token_len, count))
+  std::map<int, std::map<int, std::pair<int, int>>> word_to_feature_counts;
+
   for (const auto &line : pos_tagged_lines) {
     if (line.empty()) {
       continue;
     }
 
     if (line.compare("EOS\n") == 0) {
+
+      std::string prev_pos = "\tBOS";
+
+      // limit # of chars in sentence to the max word length in vocabs 
+      std::string sent_truncated = sentence;
+      if (sent_truncated.size() > max_word_length) {
+        sent_truncated.erase(max_word_length - sentence.size() - 1);
+      }
+
+      size_t sent_loc{0};
+
+      for (const auto &tok : tokens) {
+
+        //
+        // Example:
+        //
+        // tokens = ['吾輩', 'は', '猫', 'である']
+        // sentence = '吾輩は猫である'
+        //
+        // pis = 
+        // ['吾輩', feature_id, tokens[0].len]
+        // ['吾輩\tBOS', feature_id, tokens[0].len]
+        // ['吾輩は', feature_id, tokens[0].len]
+        // ['吾輩は\tBOS', feature_id, tokens[0].len]
+        // ['吾輩は猫', feature_id, tokens[0].len]
+        // ['吾輩は猫\tBOS', feature_id, tokens[0].len]
+        // ['吾輩は猫で', feature_id, tokens[0].len]
+        // ['吾輩は猫で\tBOS', feature_id, tokens[0].len]
+        // ['吾輩は猫であ', feature_id, tokens[0].len]
+        // ['吾輩は猫であ\tBOS', feature_id, tokens[0].len]
+        // ['吾輩は猫である', feature_id, tokens[0].len]
+        // ['吾輩は猫である\tBOS', feature_id, tokens[0].len]
+        // 
+
+        for (size_t next_char_loc = tok.token_len; next_char_loc < sent_truncated.size(); ) {
+
+          std::string fragment = sent_truncated.substr(0, next_char_loc);
+
+          bool fragment_exists = word_table.has(fragment);
+
+          int fragment_id{-1};
+          if (!word_table.put(fragment, fragment_id)) {
+            std::cerr << "Failed to add fragment: " << fragment << "\n";
+            return false;
+          }
+
+          pis.push_back({fragment_id, tok.feature_id, tok.token_len});
+
+          // patten = append feature tag to fragment.
+          std::string pattern = fragment + prev_pos;
+          int pattern_id{-1};
+          if (!word_table.put(pattern, pattern_id)) {
+            std::cerr << "Failed to add pattern: " << pattern << "\n";
+            return false;
+          }
+
+          pis.push_back({pattern_id, tok.feature_id, tok.token_len});
+
+          if (!fragment_exists) { // new pattern
+            break;
+          }
+
+          next_char_loc += utf8_len(sent_truncated[next_char_loc]);
+        }
+
+        int tok_id;
+        // first token in sentence.
+        std::string token = std::string(&sentence[sent_loc], tok.token_len);
+        bool has_word = word_table.get(token, tok_id);
+
+        if ((!has_word || (tok_id > num_seed_words)) && (classify_char_kind(token, chars_table) != CharKind::KIND_DIGIT)) {
+          // TODO
+          pos_counts[tok.pos_id] += 1;
+
+          std::string pos_str;
+          if (!feature_table.get(tok.pos_id, pos_str)) {
+            std::cerr << "Internal error: POS string not found for id " << std::to_string(tok.pos_id) << "\n";
+            return false;
+          }
+
+          std::string feature_str = pos_str + ",*,*,*";
+          
+          int feature_id{-1};
+          if (!feature_table.put(feature_str, feature_id)) {
+            std::cerr << "Too many features\n";
+            return false;
+          }
+
+          // add POS string as word
+          int prev_pos_id{-1};
+          if (!word_table.put(prev_pos, prev_pos_id)) {
+            std::cerr << "Too many words\n";
+            return false;
+          }
+
+          pis.push_back({prev_pos_id, feature_id, 0});
+        }
+
+        for (const auto &it : pis) {
+
+          int word_id{-1};
+          if (!word_table.get(it.token, word_id)) {
+            std::cerr << "Id not found for word: " << it.token << "\n";
+            return false;
+          }
+
+          auto &m = word_to_feature_counts[word_id];
+
+          if (!m.count(it.feature_id)) {
+            m[it.feature_id] = 
+          }
+
+          word_to_feature_counts[it.token]
+          it.feature_id
+          it.token
+        }
+
+        std::string pos_str;
+        if (!feature_table.get(tok.pos_id, pos_str)) { 
+          std::cerr << "Internal error: POS string not found for id " << std::to_string(tok.pos_id) << "\n";
+          return false;
+        }
+        prev_pos = "\t" + pos_str;
+
+        sent_loc += tok.token_ken;
+      }
+
+      tokens.clear();
+      sentence.clear();
+
     } else {
-      // SURAFACE\tFEATURE
+      // Parse POS tagged line: SURAFACE\tFEATURE
       std::vector<std::string> tup = split(line, "\t");
       if (tup.size() != 2) {
         std::cerr << "Invalid POS Tagged line:" << line << "\n";
@@ -408,16 +606,18 @@ bool train(const std::vector<std::string> &lines,
       }
 
       int feature_id;
-      if (!feature_table.get(feature, pos_id)) {
+      if (!feature_table.get(feature, feature_id)) {
         std::cerr << "Internal error: feature " << feature
                   << " not found in the table.\n";
         return false;
       }
 
       token_and_pos_tag tok;
-      tok.token = tup[0];
+      tok.token_len = tup[0].size();
       tok.pos_id = pos_id;
       tok.feature_id = feature_id;
+
+      sentence += tok.token;
     }
   }
 
