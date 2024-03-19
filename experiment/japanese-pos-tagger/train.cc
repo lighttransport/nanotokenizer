@@ -6,18 +6,26 @@
 #define NANOCSV_IMPLEMENTATION
 #include "nanocsv.h"
 
-
 // Zenkaku digit/alpha/katanaka
-const std::string kDigit = u8"０１２３４５６７８９〇一二三四五六七八九十百千万億兆京数・";
-const std::string kAlphabet = u8"ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚＡＢＣＤＥＦＧＨＩＪＫＬＭＮ  ＯＰＱＲＳＴＵＶＷＸＹＺ＠：／．";
-const std::string kKatakana = u8"ァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤ  ュユョヨラリルレロヮワヰヱヲンヴヵヶヷヸヹヺーヽヾヿァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤ  ュユョヨラリルレロヮワヰヱヲンヴヵヶヷヸヹヺーヽヾヿ";
+const std::string kDigit =
+    u8"０１２３４５６７８９〇一二三四五六七八九十百千万億兆京数・";
+const std::string kAlphabet =
+    u8"ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚＡＢＣＤＥＦＧＨＩＪ"
+    u8"ＫＬＭＮ  ＯＰＱＲＳＴＵＶＷＸＹＺ＠：／．";
+const std::string kKatakana =
+    u8"ァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツ"
+    u8"ヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤ  "
+    u8"ュユョヨラリルレロヮワヰヱヲンヴヵヶヷヸヹヺーヽヾヿァアィイゥウェエォオ"
+    u8"カガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツヅテデトドナニヌネノ"
+    u8"ハバパヒビピフブプヘベペホボポマミムメモャヤュユョヨラリルレロヮワヰヱヲ"
+    u8"ンヴヵヶヷヸヹヺーヽヾヿ";
 
 // Char kind is used to assist detecting word boundary.
 enum class CharKind {
   KIND_DIGIT = 0,
   KIND_ALPHABET = 1,
   KIND_KATAKANA = 2,
-  KIND_OTHER = 3, // Kanji, hiragana, emoji, etc.
+  KIND_OTHER = 3,  // Kanji, hiragana, emoji, etc.
 };
 
 inline uint32_t utf8_len(const uint8_t c) {
@@ -36,54 +44,71 @@ inline uint32_t utf8_len(const uint8_t c) {
   return 0;
 }
 
-  inline std::string extract_utf8_char(const std::string &str, uint32_t start_i,
-                                       uint32_t &len) {
-    len = 0;
+inline std::string extract_utf8_char(const std::string &str, uint32_t start_i,
+                                     uint32_t &len) {
+  len = 0;
 
-    if ((start_i + 1) > str.size()) {
+  if ((start_i + 1) > str.size()) {
+    len = 0;
+    return std::string();
+  }
+
+  unsigned char c = static_cast<unsigned char>(str[start_i]);
+
+  if (c <= 127) {
+    // ascii
+    len = 1;
+    return str.substr(start_i, 1);
+  } else if ((c & 0xE0) == 0xC0) {
+    if ((start_i + 2) > str.size()) {
       len = 0;
       return std::string();
     }
-
-    unsigned char c = static_cast<unsigned char>(str[start_i]);
-
-    if (c <= 127) {
-      // ascii
-      len = 1;
-      return str.substr(start_i, 1);
-    } else if ((c & 0xE0) == 0xC0) {
-      if ((start_i + 2) > str.size()) {
-        len = 0;
-        return std::string();
-      }
-      len = 2;
-      return str.substr(start_i, 2);
-    } else if ((c & 0xF0) == 0xE0) {
-      if ((start_i + 3) > str.size()) {
-        len = 0;
-        return std::string();
-      }
-      len = 3;
-      return str.substr(start_i, 3);
-    } else if ((c & 0xF8) == 0xF0) {
-      if ((start_i + 4) > str.size()) {
-        len = 0;
-        return std::string();
-      }
-      len = 4;
-      return str.substr(start_i, 4);
-    } else {
-      // invalid utf8
+    len = 2;
+    return str.substr(start_i, 2);
+  } else if ((c & 0xF0) == 0xE0) {
+    if ((start_i + 3) > str.size()) {
       len = 0;
       return std::string();
+    }
+    len = 3;
+    return str.substr(start_i, 3);
+  } else if ((c & 0xF8) == 0xF0) {
+    if ((start_i + 4) > str.size()) {
+      len = 0;
+      return std::string();
+    }
+    len = 4;
+    return str.substr(start_i, 4);
+  } else {
+    // invalid utf8
+    len = 0;
+    return std::string();
+  }
+}
+
+inline std::vector<std::string> split(
+    const std::string &str, const std::string &sep,
+    const uint32_t kMaxItems = (std::numeric_limits<int32_t>::max)() / 100) {
+  size_t s;
+  size_t e = 0;
+
+  size_t count = 0;
+  std::vector<std::string> result;
+
+  while ((s = str.find_first_not_of(sep, e)) != std::string::npos) {
+    e = str.find(sep, s);
+    result.push_back(str.substr(s, e - s));
+    if (++count > kMaxItems) {
+      break;
     }
   }
 
-
+  return result;
+}
 
 // Simple String <-> Id, Id -> String map
-struct StrIdMap
-{
+struct StrIdMap {
   std::unordered_map<std::string, int> str_to_id;
   std::unordered_map<int, std::string> id_to_str;
 
@@ -101,7 +126,7 @@ struct StrIdMap
 
     str_to_id[str] = int(id);
     id_to_str[int(id)] = str;
-    
+
     return true;
   }
 
@@ -110,13 +135,9 @@ struct StrIdMap
     id_to_str[val] = str;
   }
 
-  bool has(const std::string &str) const {
-    return str_to_id.count(str);
-  }
+  bool has(const std::string &str) const { return str_to_id.count(str); }
 
-  bool has(const int id) const {
-    return id_to_str.count(id);
-  }
+  bool has(const int id) const { return id_to_str.count(id); }
 
   bool get(const std::string &str, int &result) const {
     if (str_to_id.count(str)) {
@@ -135,11 +156,8 @@ struct StrIdMap
 
     return false;
   }
-  
-  size_t size() const {
-    return str_to_id.size();
-  }
-  
+
+  size_t size() const { return str_to_id.size(); }
 };
 
 static inline bool is_line_ending(const char *p, size_t i, size_t end_i) {
@@ -153,8 +171,9 @@ static inline bool is_line_ending(const char *p, size_t i, size_t end_i) {
   return false;
 }
 
-inline std::string join(const std::vector<std::string> &strs, const size_t s_idx, const size_t e_idx, const char delimiter = ',', const char quote = '"') {
-
+inline std::string join(const std::vector<std::string> &strs,
+                        const size_t s_idx, const size_t e_idx,
+                        const char delimiter = ',', const char quote = '"') {
   if (s_idx >= e_idx) {
     return std::string();
   }
@@ -167,16 +186,28 @@ inline std::string join(const std::vector<std::string> &strs, const size_t s_idx
     return std::string();
   }
 
-  for (size_t i = s_idx; i < e_idx; i++
-  
+  std::string dst;
 
+  for (size_t i = s_idx; i < e_idx; i++) {
+    if (i > s_idx) {
+      dst += delimiter;
+    }
+    if (strs[i].find(delimiter) != std::string::npos) {
+      dst += quote + strs[i] + quote;
+    } else {
+      dst += strs[i];
+    }
+  }
+
+  return dst;
 }
 
-// Support quoted string'\"' (do not consider `delimiter` character in quoted string)
-// delimiter must be a ASCII char.
-// quote_char must be a single UTF-8 char.
-inline std::vector<std::string> parse_line(const char *p, const size_t len, const char delimiter = ',', const char *quote_char = "\"")
-{
+// Support quoted string'\"' (do not consider `delimiter` character in quoted
+// string) delimiter must be a ASCII char. quote_char must be a single UTF-8
+// char.
+inline std::vector<std::string> parse_line(const char *p, const size_t len,
+                                           const char delimiter = ',',
+                                           const char *quote_char = "\"") {
   std::vector<std::string> tokens;
 
   if (len == 0) {
@@ -191,7 +222,6 @@ inline std::vector<std::string> parse_line(const char *p, const size_t len, cons
   const char *curr_p = p;
 
   for (size_t i = 0; i < len; i += utf8_len(uint8_t(*curr_p))) {
-
     curr_p = &p[i];
 
     if (is_line_ending(p, i, len - 1)) {
@@ -206,8 +236,8 @@ inline std::vector<std::string> parse_line(const char *p, const size_t len, cons
     }
 
     if (!in_quoted_string && (p[i] == delimiter)) {
-      //std::cout << "s_start = " << s_start << ", (i-1) = " << i-1 << "\n";
-      //std::cout << "p[i] = " << p[i] << "\n";
+      // std::cout << "s_start = " << s_start << ", (i-1) = " << i-1 << "\n";
+      // std::cout << "p[i] = " << p[i] << "\n";
       if (s_start < i) {
         std::string tok(p + s_start, i - s_start);
 
@@ -217,12 +247,13 @@ inline std::vector<std::string> parse_line(const char *p, const size_t len, cons
         tokens.push_back(std::string());
       }
 
-      s_start = i + 1; // next to delimiter char
+      s_start = i + 1;  // next to delimiter char
     }
   }
 
   // the remainder
-  //std::cout << "remain: s_start = " << s_start << ", len - 1 = " << len-1 << "\n";
+  // std::cout << "remain: s_start = " << s_start << ", len - 1 = " << len-1 <<
+  // "\n";
 
   if (s_start <= (len - 1)) {
     std::string tok(p + s_start, len - s_start);
@@ -232,34 +263,79 @@ inline std::vector<std::string> parse_line(const char *p, const size_t len, cons
   return tokens;
 }
 
-// 3 = Mecab dict.
-bool train(const std::vector<std::string> &lines,
-  const char delimiter, const uint32_t num_pos_field_skips = 3) {
+struct token_and_pos_tag {
+  std::string token;
+  int pos_id{-1};
+  int feature_id{-1};
+};
 
+// 4 = Mecab dict: 品詞,品詞細分類1,品詞細分類2,品詞細分類3
+bool train(const std::vector<std::string> &lines,
+           const std::vector<std::string> &pos_tagged_lines,
+           const char delimiter, const uint32_t num_pos_fields = 4) {
   StrIdMap chars_table;
   StrIdMap feature_table;
   StrIdMap word_table;
-  
-  for (const auto &it : lines) {
-    std::vector<std::string> fields = parse_line(it.c_str(), it.size(), delimiter);
 
-    if (fields.size() < num_pos_field_skips + 1 + 1) {
-      std::cerr << "Invalid line: " << it << "\n";
+  // key: feature_id, value: counts
+  std::map<int, int> feature_counts;
+
+  // key: word_id, value = (key: POS_id, value = feature_id)
+  std::map<int, std::map<int, int>> word_to_pos_and_feature_map;
+
+  for (const auto &it : lines) {
+    std::vector<std::string> fields =
+        parse_line(it.c_str(), it.size(), delimiter);
+
+    // at lest num_pos_fields + 1 fields must exist.
+    if (fields.size() < num_pos_fields + 1) {
+      std::cerr << "Insufficient fields in line: " << it << "\n";
       return false;
     }
 
-    const std::string &surface = fields[0]; 
-    const std::string &pos = fields[num_pos_field_skips + 1]; // e.g. '動詞', '助詞'
+    const std::string &surface = fields[0];
 
-    const std::string feature = join(fields, num_pos_field_skips, fields.size(), ',', '"');
-
-
-    std::vector<std::string> tags = parse_feature(feature.c_str(), feature.size(), delimiter);
-    if (tags.size() < (num_pos_field_skips + 1)) {
+    if (!word_table.put(surface)) {
+      std::cerr << "Too many words.\n";
+      return false;
     }
 
-    feature_table.put(surface);
+    int word_id;
+    if (!word_table.get(surface, word_id)) {
+      // This should not happen though.
+      std::cerr << "Internal error: word " << surface
+                << " not found in the table.\n";
+      return false;
+    }
 
+    // POS fields.
+    // e.g. 動詞,*,母音動詞,語幹
+    const std::string pos = join(fields, 1, num_pos_fields + 1, ',', '"');
+
+    // full feature string.
+    // e.g.
+    // 動詞,*,母音動詞,語幹,い置付ける,いちづけ,代表表記:位置付ける/いちづける
+    const std::string feature = join(fields, 1, fields.size(), ',', '"');
+
+    // add pos and feature
+    feature_table.put(pos);
+    feature_table.put(feature);
+
+    int pos_id;
+    if (!feature_table.get(pos, pos_id)) {
+      std::cerr << "Internal error: POS " << pos
+                << " not found in the table.\n";
+      return false;
+    }
+
+    int feature_id;
+    if (!feature_table.get(feature, pos_id)) {
+      std::cerr << "Internal error: feature " << feature
+                << " not found in the table.\n";
+      return false;
+    }
+
+    word_to_pos_and_feature_map[word_id][pos_id] = feature_id;
   }
 
   // Register base characters.
@@ -294,9 +370,60 @@ bool train(const std::vector<std::string> &lines,
   size_t num_seed_words = word_table.size();
   std::cout << "# of seed words : " << num_seed_words << "\n";
 
-  return true;
+  std::vector<token_and_pos_tag> tokens;
 
+  for (const auto &line : pos_tagged_lines) {
+    if (line.empty()) {
+      continue;
+    }
+
+    if (line.compare("EOS\n") == 0) {
+    } else {
+      // SURAFACE\tFEATURE
+      std::vector<std::string> tup = split(line, "\t");
+      if (tup.size() != 2) {
+        std::cerr << "Invalid POS Tagged line:" << line << "\n";
+        return false;
+      }
+
+      std::vector<std::string> fields =
+          parse_line(tup[1].c_str(), tup[1].size(), delimiter);
+
+      if (fields.size() < num_pos_fields) {
+        std::cerr << "Insufficient POS fields:" << tup[1] << "\n";
+        return false;
+      }
+
+      const std::string pos = join(fields, 1, num_pos_fields + 1, ',', '"');
+      const std::string feature = join(fields, 1, fields.size(), ',', '"');
+
+      feature_table.put(pos);
+      feature_table.put(feature);
+
+      int pos_id;
+      if (!feature_table.get(pos, pos_id)) {
+        std::cerr << "Internal error: POS " << pos
+                  << " not found in the table.\n";
+        return false;
+      }
+
+      int feature_id;
+      if (!feature_table.get(feature, pos_id)) {
+        std::cerr << "Internal error: feature " << feature
+                  << " not found in the table.\n";
+        return false;
+      }
+
+      token_and_pos_tag tok;
+      tok.token = tup[0];
+      tok.pos_id = pos_id;
+      tok.feature_id = feature_id;
+    }
+  }
+
+  return true;
 }
+
 
 int main(int argc, char **argv) {
   if (argc < 3) {
@@ -314,7 +441,8 @@ int main(int argc, char **argv) {
   nanocsv::TextCSV csv;
   std::string warn;
   std::string err;
-  bool ret = nanocsv::ParseTextCSVFromFile(vocab_filename, csv_option, &csv, &warn, &err);
+  bool ret = nanocsv::ParseTextCSVFromFile(vocab_filename, csv_option, &csv,
+                                           &warn, &err);
   if (warn.size()) {
     std::cout << "CSV read warn: " << warn << "\n";
   }
@@ -323,7 +451,8 @@ int main(int argc, char **argv) {
     exit(-1);
   }
 
-  std::cout << "# of rows = " << csv.num_records << ", # of columns = " << csv.num_fields << "\n";
+  std::cout << "# of rows = " << csv.num_records
+            << ", # of columns = " << csv.num_fields << "\n";
   for (size_t row = 0; row < csv.num_records; row++) {
     for (size_t col = 0; col < csv.num_fields; col++) {
       if (col > 0) {
