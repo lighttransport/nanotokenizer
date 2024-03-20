@@ -6,12 +6,12 @@
 #define NANOCSV_IMPLEMENTATION
 #include "nanocsv.h"
 
-// Zenkaku digit/alpha/katanaka
+// digit/alpha/katanaka
 const std::string kDigit =
-    u8"０１２３４５６７８９〇一二三四五六七八九十百千万億兆京数・";
+    u8"0123456789０１２３４５６７８９〇一二三四五六七八九十百千万億兆京数・";
 const std::string kAlphabet =
-    u8"ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚＡＢＣＤＥＦＧＨＩＪ"
-    u8"ＫＬＭＮ  ＯＰＱＲＳＴＵＶＷＸＹＺ＠：／．";
+    u8"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚＡＢＣＤＥＦＧＨＩＪ"
+    u8"ＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ＠：／．";
 const std::string kKatakana =
     u8"ァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツ"
     u8"ヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤ  "
@@ -22,10 +22,11 @@ const std::string kKatakana =
 
 // Char kind is used to assist detecting word boundary.
 enum class CharKind {
-  KIND_DIGIT = 0,
-  KIND_ALPHABET = 1,
-  KIND_KATAKANA = 2,
-  KIND_OTHER = 3,  // Kanji, hiragana, emoji, etc.
+  KIND_OTHER = 0,  
+  KIND_DIGIT = 1,
+  KIND_ALPHABET = 2,
+  KIND_KATAKANA = 3,
+  KIND_ANY = 4, // Kanji, hiragana, emoji, etc.
 };
 
 inline uint32_t utf8_len(const char c_) {
@@ -325,8 +326,11 @@ bool train(const std::vector<std::string> &lines,
            const std::vector<std::string> &pos_tagged_lines,
            const char delimiter, const uint32_t num_pos_fields = 4) {
   StrIdMap chars_table;
+  StrIdMap token_table;
+  StrIdMap pos_table;
   StrIdMap feature_table;
-  StrIdMap word_table;
+  //StrIdMap word_table;
+  StrIdMap pattern_table;
 
   // Maximum word length(in bytes) in vocab.
   size_t max_word_length = 0;
@@ -337,8 +341,8 @@ bool train(const std::vector<std::string> &lines,
   // key: pos_id, value: counts
   std::map<int, int> pos_counts;
 
-  // key: word_id, value = (key: POS_id, value = feature_id)
-  std::map<int, std::map<int, int>> word_to_pos_and_feature_map;
+  // key: pattern_id, value = (key: POS_id, value = feature_id)
+  std::map<int, std::map<int, int>> pattern_to_pos_and_feature_map;
 
   for (const auto &it : lines) {
     std::vector<std::string> fields =
@@ -352,15 +356,15 @@ bool train(const std::vector<std::string> &lines,
 
     const std::string &surface = fields[0];
 
-    if (!word_table.put(surface)) {
+    if (!pattern_table.put(surface)) {
       std::cerr << "Too many words.\n";
       return false;
     }
 
     max_word_length = (std::max)(surface.size(), max_word_length);
 
-    int word_id;
-    if (!word_table.get(surface, word_id)) {
+    int pattern_id;
+    if (!pattern_table.get(surface, pattern_id)) {
       // This should not happen though.
       std::cerr << "Internal error: word " << surface
                 << " not found in the table.\n";
@@ -377,11 +381,11 @@ bool train(const std::vector<std::string> &lines,
     const std::string feature = join(fields, 1, fields.size(), ',', '"');
 
     // add pos and feature
-    feature_table.put(pos);
+    pos_table.put(pos);
     feature_table.put(feature);
 
     int pos_id;
-    if (!feature_table.get(pos, pos_id)) {
+    if (!pos_table.get(pos, pos_id)) {
       std::cerr << "Internal error: POS " << pos
                 << " not found in the table.\n";
       return false;
@@ -394,8 +398,10 @@ bool train(const std::vector<std::string> &lines,
       return false;
     }
 
-    word_to_pos_and_feature_map[word_id][pos_id] = feature_id;
+    pattern_to_pos_and_feature_map[pattern_id][pos_id] = feature_id;
   }
+  size_t num_seed_patterns = pattern_table.size();
+  std::cout << "# of seed patterns : " << num_seed_patterns << "\n";
 
   std::cout << "Max word length: " << max_word_length << "\n";
 
@@ -404,7 +410,7 @@ bool train(const std::vector<std::string> &lines,
   for (size_t i = 0; i < kDigit.size(); i += char_len) {
     std::string s = extract_utf8_char(kDigit, i, char_len);
     chars_table.add(s, int(CharKind::KIND_DIGIT));
-    if (!word_table.put(s)) {
+    if (!pattern_table.put(s)) {
       std::cerr << "Too many words.\n";
       return false;
     }
@@ -413,7 +419,7 @@ bool train(const std::vector<std::string> &lines,
   for (size_t i = 0; i < kAlphabet.size(); i += char_len) {
     std::string s = extract_utf8_char(kAlphabet, i, char_len);
     chars_table.add(s, int(CharKind::KIND_ALPHABET));
-    if (!word_table.put(s)) {
+    if (!pattern_table.put(s)) {
       std::cerr << "Too many words.\n";
       return false;
     }
@@ -422,23 +428,22 @@ bool train(const std::vector<std::string> &lines,
   for (size_t i = 0; i < kKatakana.size(); i += char_len) {
     std::string s = extract_utf8_char(kKatakana, i, char_len);
     chars_table.add(s, int(CharKind::KIND_KATAKANA));
-    if (!word_table.put(s)) {
+    if (!pattern_table.put(s)) {
       std::cerr << "Too many words.\n";
       return false;
     }
   }
 
-  size_t num_seed_words = word_table.size();
-  std::cout << "# of seed words : " << num_seed_words << "\n";
 
-  std::vector<token_and_pos_tag> tokens;
+  //std::vector<token_and_pos_tag> tokens;
+  std::vector<std::pair<std::string, std::string>> token_and_features; // <token, feature>
 
-  // 0: word_id, 1: feature_id, 2: word length
+  // 0: pattern_id, 1: feature_id, 2: pattern length(shift)
   std::vector<std::array<int, 3>> pis;
   std::string sentence;
 
-  // key = word_id, value = (key = feature_id, value = (token_len, count))
-  std::map<int, std::map<int, std::pair<int, int>>> word_to_feature_counts;
+  // key = pattern_id, value = (key = (pattern len(shift), feature_id), value = count)
+  std::map<int, std::map<std::pair<int, int>, int>> pattern_to_shift_feature_counts;
 
   for (const auto &line : pos_tagged_lines) {
     if (line.empty()) {
@@ -455,33 +460,40 @@ bool train(const std::vector<std::string> &lines,
         sent_truncated.erase(max_word_length - sentence.size() - 1);
       }
 
+
+      //
+      // Example:
+      //
+      // tokens = ['吾輩', 'は', '猫', 'である']
+      // sentence = '吾輩は猫である'
+      //
+      // pis = 
+      // ['吾輩', feature_id, tokens[0].len]
+      // ['吾輩\tBOS', feature_id, tokens[0].len]
+      // ['吾輩は', feature_id, tokens[0].len]
+      // ['吾輩は\tBOS', feature_id, tokens[0].len]
+      // ['吾輩は猫', feature_id, tokens[0].len]
+      // ['吾輩は猫\tBOS', feature_id, tokens[0].len]
+      // ['吾輩は猫で', feature_id, tokens[0].len]
+      // ['吾輩は猫で\tBOS', feature_id, tokens[0].len]
+      // ['吾輩は猫であ', feature_id, tokens[0].len]
+      // ['吾輩は猫であ\tBOS', feature_id, tokens[0].len]
+      // ['吾輩は猫である', feature_id, tokens[0].len]
+      // ['吾輩は猫である\tBOS', feature_id, tokens[0].len]
+      // 
+
       size_t sent_loc{0};
+      for (const auto &ts : token_and_features) {
 
-      for (const auto &tok : tokens) {
+        const std::string &token = ts.first;
+        const std::string &feature = ts.second;
 
-        //
-        // Example:
-        //
-        // tokens = ['吾輩', 'は', '猫', 'である']
-        // sentence = '吾輩は猫である'
-        //
-        // pis = 
-        // ['吾輩', feature_id, tokens[0].len]
-        // ['吾輩\tBOS', feature_id, tokens[0].len]
-        // ['吾輩は', feature_id, tokens[0].len]
-        // ['吾輩は\tBOS', feature_id, tokens[0].len]
-        // ['吾輩は猫', feature_id, tokens[0].len]
-        // ['吾輩は猫\tBOS', feature_id, tokens[0].len]
-        // ['吾輩は猫で', feature_id, tokens[0].len]
-        // ['吾輩は猫で\tBOS', feature_id, tokens[0].len]
-        // ['吾輩は猫であ', feature_id, tokens[0].len]
-        // ['吾輩は猫であ\tBOS', feature_id, tokens[0].len]
-        // ['吾輩は猫である', feature_id, tokens[0].len]
-        // ['吾輩は猫である\tBOS', feature_id, tokens[0].len]
-        // 
+        size_t shift = token.size();
 
-        for (size_t next_char_loc = tok.token_len; next_char_loc < sent_truncated.size(); ) {
+        // TODO: limit shift amount.
 
+
+        for (size_t k = shift; k < sent_truncated.size(); ) {
           std::string fragment = sent_truncated.substr(0, next_char_loc);
 
           bool fragment_exists = word_table.has(fragment);
@@ -512,14 +524,15 @@ bool train(const std::vector<std::string> &lines,
         }
 
         int tok_id;
-        // first token in sentence.
+        // extract a token from the sentence.
         std::string token = std::string(&sentence[sent_loc], tok.token_len);
         bool has_word = word_table.get(token, tok_id);
 
         if ((!has_word || (tok_id > num_seed_words)) && (classify_char_kind(token, chars_table) != CharKind::KIND_DIGIT)) {
-          // TODO
-          pos_counts[tok.pos_id] += 1;
 
+          // token is only seen in train data
+          // Add it also to vocabs
+        
           std::string pos_str;
           if (!feature_table.get(tok.pos_id, pos_str)) {
             std::cerr << "Internal error: POS string not found for id " << std::to_string(tok.pos_id) << "\n";
@@ -542,25 +555,25 @@ bool train(const std::vector<std::string> &lines,
           }
 
           pis.push_back({prev_pos_id, feature_id, 0});
+
+          pos_counts[tok.pos_id] += 1;
+
         }
 
-        for (const auto &it : pis) {
+        // count occurrences
+        for (const auto &tup : pis) {
 
-          int word_id{-1};
-          if (!word_table.get(it.token, word_id)) {
-            std::cerr << "Id not found for word: " << it.token << "\n";
-            return false;
-          }
+          int word_id = tup[0];
+          int feature_id = tup[1];
+          int word_len = tup[2];
 
           auto &m = word_to_feature_counts[word_id];
 
-          if (!m.count(it.feature_id)) {
-            m[it.feature_id] = 
+          if (!m.count(feature_id)) {
+            m[feature_id] = {word_len, 0};
           }
 
-          word_to_feature_counts[it.token]
-          it.feature_id
-          it.token
+          m[feature_id].second++;
         }
 
         std::string pos_str;
@@ -570,7 +583,7 @@ bool train(const std::vector<std::string> &lines,
         }
         prev_pos = "\t" + pos_str;
 
-        sent_loc += tok.token_ken;
+        sent_loc += tok.token_len;
       }
 
       tokens.clear();
@@ -584,6 +597,7 @@ bool train(const std::vector<std::string> &lines,
         return false;
       }
 
+#if 0
       std::vector<std::string> fields =
           parse_line(tup[1].c_str(), tup[1].size(), delimiter);
 
@@ -617,8 +631,43 @@ bool train(const std::vector<std::string> &lines,
       tok.pos_id = pos_id;
       tok.feature_id = feature_id;
 
-      sentence += tok.token;
+#else
+      token_and_features.push_back({tup[0], tup[1]});
+      sentence += tup[0];
+#endif
     }
+  }
+
+  // prune redundant patterns
+  {
+    // at this moment, `pos_counts` only records the occurrence of POS tokens in train data.
+    size_t max_pos_count;
+    for (const auto &item : pos_counts) {
+      max_pos_count = (std::max)(size_t(item.second), max_pos_count);
+    }
+
+    // (seen in patterns?, word_id)
+    std::vector<std::pair<bool, int>> word_ids;
+
+    for (const auto &m : word_to_feature_counts) {
+
+      const int word_id = m.first;
+      bool seen = word_table.has(word_id);
+      
+      word_ids.push_back({seen, word_id});
+    }
+
+    std::sort(word_and_id_list.begin(), word_and_id_list.end());
+
+    for (size_t i = 0; i < word_and_id_list.size(); i++) {
+      const std::string &word = word_and_id_list[i].first;
+      const int word_id = word_and_id_list[i].second;
+
+      if (word_and_
+    }
+    
+    
+
   }
 
   return true;
