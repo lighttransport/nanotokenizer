@@ -3,6 +3,9 @@
 #include <limits>
 #include <unordered_map>
 
+#define SAFETENSORS_CPP_IMPLEMENTATION
+#include "safetensors.hh"
+
 #define NANOCSV_IMPLEMENTATION
 #include "nanocsv.h"
 
@@ -15,6 +18,15 @@
     std::cerr << ss_e.str();                             \
     return false;                                        \
   } while (0)
+
+struct feature_t {
+  int id{-1};
+  uint16_t pos_str_len{0}; // Up to 16bit
+  uint16_t feature_str_len{0}; // Up to 16bit
+  // Assume buffer is up to 4GB
+  uint32_t pos_offset{0}; // POS string offset bytes in the buffer
+  uint32_t feature_offset{0}; // Feature string offset bytes in the buffer
+};
 
 static const char* kPOSDigit = "\x09\xE5\x90\x8D\xE8\xA9\x9E\x2C\xE6\x95\xB0\xE8\xA9\x9E\x2C\x2A\x2C\x2A";
 
@@ -191,11 +203,17 @@ inline std::vector<std::string> split(
 }
 
 // Simple T <-> id map
-// No erase()
+// NOTE: size() = max_id + 1
+// No erase() for simplicity.
 template <typename T>
 struct IdMap {
   std::map<T, int> t_to_id;
   std::map<int, T> id_to_t;
+
+  void clear() {
+    t_to_id.clear();
+    id_to_t.clear();
+  }
 
   // assign id automatically
   bool put(const T &p) {
@@ -263,7 +281,7 @@ struct IdMap {
 
 using StrIdMap = IdMap<std::string>;
 using PatternIdMap = IdMap<std::pair<std::string, int>>;  // <str, len>
-using FeatureIdMap = IdMap<std::pair<int, int>>;  // <feature_str_id, len>
+using FeatureIdMap = IdMap<std::pair<int, int>>;  // <feature_id, pos_id>
 
 static inline bool is_line_ending(const char *p, size_t i, size_t end_i) {
   if (p[i] == '\0') return true;
@@ -413,321 +431,438 @@ bool extract_pos(const std::string &feature, std::string &pos,
   return true;
 }
 
-// 4 = Mecab dict: 品詞,品詞細分類1,品詞細分類2,品詞細分類3
-bool train(const std::vector<std::string> &lines,
-           const std::vector<std::string> &pos_tagged_lines,
-           const char delimiter, const uint32_t num_pos_fields = 4) {
-  std::map<std::string, int> chars_table;
-  StrIdMap token_table;
-  StrIdMap pos_table;
-  StrIdMap feature_table;
-  // StrIdMap word_table;
-  PatternIdMap pattern_table;
+class Trainer
+{
+ public:
+  bool train(const std::vector<std::string> &lines,
+             const std::vector<std::string> &pos_tagged_lines,
+             const char delimiter, const uint32_t num_pos_fields = 4) {
+    std::map<std::string, int> chars_table;
+    StrIdMap token_table;
+    // StrIdMap word_table;
+    PatternIdMap pattern_table;
 
-  // Maximum word length(in bytes) in vocab.
-  size_t max_word_length = 0;
+    // Maximum word length(in bytes) in vocab.
+    size_t max_word_length = 0;
 
-  // key: feature_id, value: counts
-  std::map<int, int> feature_counts;
+    // key: feature_id, value: counts
+    std::map<int, int> feature_counts;
 
-  // key: pos_id, value: counts
-  std::map<int, int> pos_counts;
+    // key: pos_id, value: counts
+    std::map<int, int> pos_counts;
 
-  // key: pattern_id, value = (key: POS_id, value = feature_id)
-  std::map<int, std::map<int, int>> pattern_to_pos_and_feature_map;
+    // key: pattern_id, value = (key: POS_id, value = feature_id)
+    std::map<int, std::map<int, int>> pattern_to_pos_and_feature_map;
 
-  for (const auto &it : lines) {
-    std::vector<std::string> fields =
-        parse_line(it.c_str(), it.size(), delimiter);
+    _pos_table.clear();
+    _feature_table.clear();
 
-    // at lest num_pos_fields + 1 fields must exist.
-    if (fields.size() < num_pos_fields + 1) {
-      std::cerr << "Insufficient fields in line: " << it << "\n";
-      return false;
-    }
-
-    const std::string &surface = fields[0];
-
-    int pattern_id;
-    if (!pattern_table.put({surface, -1}, pattern_id)) {
-      ERROR_AND_RETURN("Too many patterns.");
-    }
-
-    max_word_length = (std::max)(surface.size(), max_word_length);
-
-    // POS fields.
-    // e.g. 動詞,*,母音動詞,語幹
-    const std::string pos = join(fields, 1, num_pos_fields + 1, ',', '"');
-
-    // full feature string.
-    // e.g.
-    // 動詞,*,母音動詞,語幹,い置付ける,いちづけ,代表表記:位置付ける/いちづける
-    const std::string feature = join(fields, 1, fields.size(), ',', '"');
-
-    // add pos and feature
-    pos_table.put(pos);
-    feature_table.put(feature);
-
-    int pos_id;
-    if (!pos_table.get(pos, pos_id)) {
-      std::cerr << "Internal error: POS " << pos
-                << " not found in the table.\n";
-      return false;
-    }
-
-    int feature_id;
-    if (!feature_table.get(feature, feature_id)) {
-      std::cerr << "Internal error: feature " << feature
-                << " not found in the table.\n";
-      return false;
-    }
-
-    pattern_to_pos_and_feature_map[pattern_id][pos_id] = feature_id;
-  }
-  size_t num_seed_patterns = pattern_table.size();
-  std::cout << "# of seed patterns : " << num_seed_patterns << "\n";
-
-  std::cout << "Max word length: " << max_word_length << "\n";
-
-  // Register base characters.
-  uint32_t char_len = 0;
-  for (size_t i = 0; i < kDigit.size(); i += char_len) {
-    std::string s = extract_utf8_char(kDigit, i, char_len);
-    chars_table[s] = int(CharKind::KIND_DIGIT);
-    if (!pattern_table.put({s, -1})) {
-      ERROR_AND_RETURN("Too many words.");
-    }
-  }
-
-  for (size_t i = 0; i < kAlphabet.size(); i += char_len) {
-    std::string s = extract_utf8_char(kAlphabet, i, char_len);
-    chars_table[s] = int(CharKind::KIND_ALPHABET);
-    if (!pattern_table.put({s, -1})) {
-      ERROR_AND_RETURN("Too many words.");
-    }
-  }
-
-  for (size_t i = 0; i < kKatakana.size(); i += char_len) {
-    std::string s = extract_utf8_char(kKatakana, i, char_len);
-    chars_table[s] = int(CharKind::KIND_KATAKANA);
-    if (!pattern_table.put({s, -1})) {
-      ERROR_AND_RETURN("Too many words.");
-    }
-  }
-
-  // std::vector<token_and_pos_tag> tokens;
-  std::vector<std::pair<std::string, std::string>>
-      token_and_features;  // <token, feature>
-
-  // 0: pattern_id, 1: feature_id, 2: pattern length(shift)
-  // std::vector<std::array<int, 3>> pis;
-  std::string sentence;
-
-  // key = pattern_id, value = (key = (pattern len(shift), feature_id), value =
-  // count)
-  std::map<int, std::map<std::pair<int, int>, int>>
-      pattern_to_shift_feature_counts;
-
-  for (const auto &line : pos_tagged_lines) {
-    if (line.empty()) {
-      continue;
-    }
-
-    if (line.compare("EOS\n") == 0) {
-
-      //
-      // Example:
-      //
-      // tokens = ['吾輩', 'は', '猫', 'である']
-      // sentence = '吾輩は猫である'
-      //
-      // ['吾輩', feature_id, tokens[0].len]
-      // ['吾輩\tBOS', feature_id, tokens[0].len]
-      // ['吾輩は', feature_id, tokens[0].len]
-      // ['吾輩は\tBOS', feature_id, tokens[0].len]
-      // ['吾輩は猫', feature_id, tokens[0].len]
-      // ['吾輩は猫\tBOS', feature_id, tokens[0].len]
-      // ['吾輩は猫で', feature_id, tokens[0].len]
-      // ['吾輩は猫で\tBOS', feature_id, tokens[0].len]
-      // ['吾輩は猫であ', feature_id, tokens[0].len]
-      // ['吾輩は猫であ\tBOS', feature_id, tokens[0].len]
-      // ['吾輩は猫である', feature_id, tokens[0].len]
-      // ['吾輩は猫である\tBOS', feature_id, tokens[0].len]
-      //
-
-      size_t sent_loc{0};
-      size_t prev_pos_len{0};
-      int prev_pos_id{0};
-      for (const auto &ts : token_and_features) {
-        const std::string &token = ts.first;
-        const std::string &feature = ts.second;
-        int feature_id{-1};
-        if (!feature_table.put(feature, feature_id)) {
-          ERROR_AND_RETURN("Too many features");
-        }
-
-        size_t shift = token.size();
-
-        // TODO: limit shift amount.
-
-        for (size_t sent_len = shift;
-             (sent_loc + sent_len <= sentence.size()) &&
-             (sent_len <= max_word_length);) {
-          std::string fragment = sentence.substr(sent_loc, sent_len);
-
-          bool fragment_exists = pattern_table.has({fragment, -1});
-
-          int fragment_id{-1};
-          if (!pattern_table.put({fragment, -1}, fragment_id)) {
-            ERROR_AND_RETURN("Failed to add fragment: " << fragment);
-          }
-
-          int pattern_id{-1};
-          if (!pattern_table.put({fragment, prev_pos_len}, pattern_id)) {
-            ERROR_AND_RETURN("Failed to add pattern: {" << fragment << ", "
-                      << prev_pos_len << "}");
-          }
-
-          pattern_to_shift_feature_counts[fragment_id][{shift, feature_id}]++;
-          pattern_to_shift_feature_counts[pattern_id][{shift, feature_id}]++;
-
-          if (!fragment_exists) {  // new pattern
-            break;
-          }
-
-          sent_len += utf8_len(sentence[sent_loc + sent_len]);
-        }
-
-        int tok_id{-1};
-        if (!pattern_table.put({token, -1}, tok_id)) {
-          std::cerr << "Failed to add pattern: {" << token << ", -1}\n";
-          return false;
-        }
-
-        // extract POS part from feature string.
-        std::string pos;
-        if (!extract_pos(feature, pos)) {
-          return false;
-        }
-
-        int pos_id{-1};
-        if (!pos_table.put(pos, pos_id)) {
-          std::cerr << "Failed to add POS: " << pos << "\n";
-          return false;
-        }
-
-        // token is only seen in training data
-        // Add it also to vocabs
-        if ((tok_id >= num_seed_patterns) &&
-            (classify_char_kind(token, chars_table) != CharKind::KIND_DIGIT)) {
-          pos_counts[pos_id]++;
-          int pi{-1};
-          if (!pattern_table.put({"", prev_pos_id}, pi)) {
-            ERROR_AND_RETURN("Failed to add pattern: {\"\", " << prev_pos_id
-                      << "}");
-          }
-
-          std::string feature_str = pos + ",*,*,*\n";  // TODO: strip newline?
-
-          int feature_id{-1};
-          if (!feature_table.put(feature_str, feature_id)) {
-            ERROR_AND_RETURN("Too many features");
-          }
-
-          pattern_to_shift_feature_counts[pi][{0, feature_id}]++;
-        }
-
-        sent_loc += token.size();
-        prev_pos_id = pos_id;
+    // hardcoded pos id
+    _pos_table.put("\tBOS"); // must be 0
+    _pos_table.put(kPOSUnknown); // 1
+    _pos_table.put(kPOSDigit); // 2
+    _pos_table.put(kPOSSymbol); // 3
+    {
+      int id{-1};
+      _pos_table.get("\tBOS",id);
+      if (id != 0) {
+        ERROR_AND_RETURN("BOS id must be 0");
       }
-
-      token_and_features.clear();
-      sentence.clear();
-
-    } else {
-      // Parse POS tagged line: SURAFACE\tFEATURE
-      std::vector<std::string> tup = split(line, "\t");
-      if (tup.size() != 2) {
-        ERROR_AND_RETURN("Invalid POS Tagged line:" << line);
+      _pos_table.get(kPOSUnknown,id);
+      if (id != 1) {
+        ERROR_AND_RETURN("Unknown POS id must be 1");
       }
-
-      token_and_features.push_back({tup[0], tup[1]});
-      sentence += tup[0];
+      _pos_table.get(kPOSDigit,id);
+      if (id != 2) {
+        ERROR_AND_RETURN("Digit POS id must be 2");
+      }
+      _pos_table.get(kPOSSymbol,id);
+      if (id != 3) {
+        ERROR_AND_RETURN("Symbol POS id must be 3");
+      }
     }
-  }
 
-  // prune redundant patterns
-  {
-    // key: single char id + POS id, value = (count, unique_id))
-    std::unordered_map<int, std::pair<int, int>> counters;
+    for (const auto &it : lines) {
+      std::vector<std::string> fields =
+          parse_line(it.c_str(), it.size(), delimiter);
 
-    for (const auto &item : chars_table) {
-      uint32_t len;
-      uint32_t cp = to_codepoint(item.first.c_str(), len);
-      if ((cp == ~0) || (len == 0) || (cp > kMaxCodePoint)) {
-        // ???
-        std::cerr << "Invalid UTF8 character.\n";
+      // at lest num_pos_fields + 1 fields must exist.
+      if (fields.size() < num_pos_fields + 1) {
+        std::cerr << "Insufficient fields in line: " << it << "\n";
         return false;
       }
 
-      uint32_t id = uint32_t(counters.size());
-      counters[cp] = {0, id};
+      const std::string &surface = fields[0];
+
+      int pattern_id;
+      if (!pattern_table.put({surface, -1}, pattern_id)) {
+        ERROR_AND_RETURN("Too many patterns.");
+      }
+
+      max_word_length = (std::max)(surface.size(), max_word_length);
+
+      // POS fields.
+      // e.g. 動詞,*,母音動詞,語幹
+      const std::string pos = join(fields, 1, num_pos_fields + 1, ',', '"');
+
+      // full feature string.
+      // e.g.
+      // 動詞,*,母音動詞,語幹,い置付ける,いちづけ,代表表記:位置付ける/いちづける
+      const std::string feature = join(fields, 1, fields.size(), ',', '"');
+
+      // add pos and feature
+      _pos_table.put(pos);
+      _feature_table.put(feature);
+
+      int pos_id{-1};
+      if (!_pos_table.get(pos, pos_id)) {
+        std::cerr << "Internal error: POS " << pos
+                  << " not found in the table.\n";
+        return false;
+      }
+
+      int feature_id{-1};
+      if (!_feature_table.get(feature, feature_id)) {
+        std::cerr << "Internal error: feature " << feature
+                  << " not found in the table.\n";
+        return false;
+      }
+
+      pattern_to_pos_and_feature_map[pattern_id][pos_id] = feature_id;
+    }
+    size_t num_seed_patterns = pattern_table.size();
+    std::cout << "# of seed patterns : " << num_seed_patterns << "\n";
+
+    std::cout << "Max word length: " << max_word_length << "\n";
+
+    // Register base characters.
+    uint32_t char_len = 0;
+    for (size_t i = 0; i < kDigit.size(); i += char_len) {
+      std::string s = extract_utf8_char(kDigit, i, char_len);
+      chars_table[s] = int(CharKind::KIND_DIGIT);
+      if (!pattern_table.put({s, -1})) {
+        ERROR_AND_RETURN("Too many words.");
+      }
     }
 
-    for (const auto &item : pos_table.t_to_id) {
-      uint32_t id = uint32_t(counters.size());
-      counters[kMaxCodePoint + 1 + item.second] = {0, id};
+    for (size_t i = 0; i < kAlphabet.size(); i += char_len) {
+      std::string s = extract_utf8_char(kAlphabet, i, char_len);
+      chars_table[s] = int(CharKind::KIND_ALPHABET);
+      if (!pattern_table.put({s, -1})) {
+        ERROR_AND_RETURN("Too many words.");
+      }
     }
 
-    size_t max_pos_id;
-    for (const auto &item : pos_table.t_to_id) {
-      max_pos_id = (std::max)(size_t(item.second), max_pos_id);
+    for (size_t i = 0; i < kKatakana.size(); i += char_len) {
+      std::string s = extract_utf8_char(kKatakana, i, char_len);
+      chars_table[s] = int(CharKind::KIND_KATAKANA);
+      if (!pattern_table.put({s, -1})) {
+        ERROR_AND_RETURN("Too many words.");
+      }
     }
 
-    for (const auto &item : pattern_table.t_to_id) {
-      const std::pair<std::string, int> &pattern = item.first;
-      const std::string &p_str = pattern.first;
+    // std::vector<token_and_pos_tag> tokens;
+    std::vector<std::pair<std::string, std::string>>
+        token_and_features;  // <token, feature>
 
-      int prev_pos_id = pattern.second;
-      int p_id = item.second;
-      int shift = int(p_str.size());
+    // 0: pattern_id, 1: feature_id, 2: pattern length(shift)
+    // std::vector<std::array<int, 3>> pis;
+    std::string sentence;
 
-      int feature_id{0};
+    // key = pattern_id, value = (key = (pattern len(shift), feature_id), value =
+    // count)
+    std::map<int, std::map<std::pair<int, int>, int>>
+        pattern_to_shift_feature_counts;
 
-      if (!pattern_to_shift_feature_counts.count(p_id)) {
-        // Pattern is not seen in training data.
-        if (p_id < num_seed_patterns) { // Pattern in input vocabs.
-          const std::map<int, int>& ps_map = pattern_to_pos_and_feature_map.at(p_id);
-          int pos_id{0};
+    for (const auto &line : pos_tagged_lines) {
+      if (line.empty()) {
+        continue;
+      }
 
-          // Find the lowest count one
-          for (const auto &ps : ps_map) {
-            if (counters[ps.first] >= counters[pos_id]) {
-              pos_id = ps.first;
-            }
+      if (line.compare("EOS\n") == 0) {
+
+        //
+        // Example:
+        //
+        // tokens = ['吾輩', 'は', '猫', 'である']
+        // sentence = '吾輩は猫である'
+        //
+        // pattern_to_shift_feature_counts = 
+        //
+        // [{'吾輩', -1} , feature_id, tokens[0].len]
+        // [{'吾輩', pos0_id}', feature_id, tokens[0].len]
+        // [{'吾輩は', -1}, feature_id, tokens[0].len]
+        // [{'吾輩は', pos0_id}, feature_id, tokens[0].len]
+        // [{'吾輩は猫', -1}, feature_id, tokens[0].len]
+        // [{'吾輩は猫', pos0_id}, feature_id, tokens[0].len]
+        // [{'吾輩は猫で', -1}, feature_id, tokens[0].len]
+        // [{'吾輩は猫で', pos0_id}, feature_id, tokens[0].len]
+        // [{'吾輩は猫であ', -1}, feature_id, tokens[0].len]
+        // [{'吾輩は猫であ' pos0_id}, feature_id, tokens[0].len]
+        // [{'吾輩は猫である', -1} feature_id, tokens[0].len]
+        // [{'吾輩は猫である', pos0_id}, feature_id, tokens[0].len]
+        // [{'は', -1}, feature_id, tokens[1].len]
+        // [{'は', pos1_id}, feature_id, tokens[1].len]
+        // [{'は猫', -1}, feature_id, tokens[1].len]
+        // [{'は猫', pos1_id}, feature_id, tokens[1].len]
+        // [{'は猫で', -1}, feature_id, tokens[1].len]
+        // [{'は猫で', pos1_id}, feature_id, tokens[1].len]
+        // [{'は猫であ', -1}, feature_id, tokens[1].len]
+        // [{'は猫であ' pos1_id}, feature_id, tokens[1].len]
+        // [{'は猫である', -1} feature_id, tokens[1].len]
+        // [{'は猫である', pos1_id}, feature_id, tokens[1].len]
+        // ...
+
+        size_t sent_loc{0};
+        size_t prev_pos_len{0};
+        int prev_pos_id{0};
+        for (const auto &ts : token_and_features) {
+          const std::string &token = ts.first;
+          const std::string &feature = ts.second;
+          int feature_id{-1};
+          if (!_feature_table.put(feature, feature_id)) {
+            ERROR_AND_RETURN("Too many features");
           }
-          feature_id = ps_map.find(pos_id)->second;
-        } else if (classify_char_kind(p_str, chars_table) == CharKind::KIND_DIGIT) {
-          std::string feature = std::string(kPOSDigit) + ",*,*,*\n";
 
-          if (!feature_table.put(feature, feature_id)) {
-            std::cerr << "Too many features.\n";
+          size_t shift = token.size();
+
+          // TODO: limit shift amount.
+
+          for (size_t sent_len = shift;
+               (sent_loc + sent_len <= sentence.size()) &&
+               (sent_len <= max_word_length);) {
+            std::string fragment = sentence.substr(sent_loc, sent_len);
+
+            bool fragment_exists = pattern_table.has({fragment, -1});
+
+            int fragment_id{-1};
+            if (!pattern_table.put({fragment, -1}, fragment_id)) {
+              ERROR_AND_RETURN("Failed to add fragment: " << fragment);
+            }
+
+            int pattern_id{-1};
+            if (!pattern_table.put({fragment, prev_pos_len}, pattern_id)) {
+              ERROR_AND_RETURN("Failed to add pattern: {" << fragment << ", "
+                        << prev_pos_len << "}");
+            }
+
+            pattern_to_shift_feature_counts[fragment_id][{shift, feature_id}]++;
+            pattern_to_shift_feature_counts[pattern_id][{shift, feature_id}]++;
+
+            if (!fragment_exists) {  // new pattern
+              break;
+            }
+
+            sent_len += utf8_len(sentence[sent_loc + sent_len]);
+          }
+
+          int tok_id{-1};
+          if (!pattern_table.put({token, -1}, tok_id)) {
+            std::cerr << "Failed to add pattern: {" << token << ", -1}\n";
             return false;
           }
-        } else if (classify_char_kind(p_str, chars_table) != CharKind::KIND_OTHER) {
-          // TODO
-        } else {
-          // TODO
 
+          // extract POS part from feature string.
+          std::string pos;
+          if (!extract_pos(feature, pos)) {
+            return false;
+          }
+
+          int pos_id{-1};
+          if (!_pos_table.put(pos, pos_id)) {
+            std::cerr << "Failed to add POS: " << pos << "\n";
+            return false;
+          }
+
+          // token is only seen in training data
+          // Add it also to vocabs
+          if ((tok_id >= num_seed_patterns) &&
+              (classify_char_kind(token, chars_table) != CharKind::KIND_DIGIT)) {
+            pos_counts[pos_id]++;
+            int pi{-1};
+            if (!pattern_table.put({"", prev_pos_id}, pi)) {
+              ERROR_AND_RETURN("Failed to add pattern: {\"\", " << prev_pos_id
+                        << "}");
+            }
+
+            std::string feature_str = pos + ",*,*,*\n";  // TODO: strip newline?
+
+            int feature_id{-1};
+            if (!_feature_table.put(feature_str, feature_id)) {
+              ERROR_AND_RETURN("Too many features");
+            }
+
+            pattern_to_shift_feature_counts[pi][{0, feature_id}]++;
+          }
+
+          sent_loc += token.size();
+          prev_pos_id = pos_id;
         }
+
+        token_and_features.clear();
+        sentence.clear();
+
+      } else {
+        // Parse POS tagged line: SURAFACE\tFEATURE
+        std::vector<std::string> tup = split(line, "\t");
+        if (tup.size() != 2) {
+          ERROR_AND_RETURN("Invalid POS Tagged line:" << line);
+        }
+
+        token_and_features.push_back({tup[0], tup[1]});
+        sentence += tup[0];
+      }
+    }
+
+    // prune redundant patterns
+    {
+
+      for (const auto &item : chars_table) {
+        uint32_t len;
+        uint32_t cp = to_codepoint(item.first.c_str(), len);
+        if ((cp == ~0) || (len == 0) || (cp > kMaxCodePoint)) {
+          // ???
+          std::cerr << "Invalid UTF8 character.\n";
+          return false;
+        }
+
+        uint32_t id = uint32_t(counters.size());
+        counters[cp] = {0, id};
+      }
+
+      for (const auto &item : _pos_table.t_to_id) {
+        uint32_t id = uint32_t(counters.size());
+        counters[kMaxCodePoint + 1 + item.second] = {0, id};
+      }
+
+      size_t max_pos_id;
+      for (const auto &item : _pos_table.t_to_id) {
+        max_pos_id = (std::max)(size_t(item.second), max_pos_id);
+      }
+
+      for (const auto &item : pattern_table.t_to_id) {
+        const std::pair<std::string, int> &pattern = item.first;
+        const std::string &p_str = pattern.first;
+
+        int prev_pos_id = pattern.second;
+        int p_id = item.second;
+        int shift = int(p_str.size());
+
+        int feature_id{0};
+
+        if (!pattern_to_shift_feature_counts.count(p_id)) {
+          // Pattern is not seen in training data.
+          if (p_id < num_seed_patterns) { // Pattern in input vocabs.
+            const std::map<int, int>& ps_map = pattern_to_pos_and_feature_map.at(p_id);
+            int pos_id{0};
+
+            // Find the lowest count one
+            for (const auto &ps : ps_map) {
+              if (counters[ps.first] >= counters[pos_id]) {
+                pos_id = ps.first;
+              }
+            }
+            feature_id = ps_map.find(pos_id)->second;
+          } else if (classify_char_kind(p_str, chars_table) == CharKind::KIND_DIGIT) {
+            std::string feature = std::string(kPOSDigit) + ",*,*,*\n";
+
+            if (!_feature_table.put(feature, feature_id)) {
+              std::cerr << "Too many features.\n";
+              return false;
+            }
+          } else if (classify_char_kind(p_str, chars_table) != CharKind::KIND_OTHER) {
+            // TODO
+          } else {
+            // TODO
+
+          }
+        }
+
       }
 
     }
 
+
+
+    return true;
   }
 
-  return true;
-}
+  bool write_patterns(const std::string &base_filename) {
+    FeatureIdMap feature_id_map;
+    feature_id_map.put({0, 1}); // (unknown, kPOSUnknown)
+
+    // Single UTF-8 character to id table.
+    // We use uint32 insted of uint16(in jagger), since it may not fit in 16bit.
+    std::vector<int32_t> char_to_id;
+    char_to_id.assign(kMaxCodePoint + 1 + _pos_table.size(), -1); // -1 = invalid
+    char_to_id[0] = 0; // BOS 
+    for (size_t i = 1; i < char_to_id.size(); i++) {
+      if (counters.count(i)) {
+        const auto &item = counters.at(i); 
+        if (item.first) { // has counts
+          char_to_id[item.second] = int(i);
+        }
+      }
+    }
+
+    //
+    // Serialize feature(+ pos) strings
+    // TODO: Concatenate string with null char for better portablity?
+    //
+    std::string feature_str_buf;
+    std::vector<size_t> pos_offsets;
+    std::vector<size_t> pos_str_lens;
+    pos_offsets.assign(_pos_table.size(), ~0);
+    pos_str_lens.assign(_pos_table.size(), ~0);
+    for (const auto &item : _pos_table.t_to_id) {
+      pos_offsets[item.second] = feature_str_buf.size();
+      pos_str_lens[item.second] = item.first.size();
+    
+      feature_str_buf += item.first;
+    }
+
+    std::vector<size_t> feature_offsets;
+    std::vector<size_t> feature_str_lens;
+    feature_offsets.assign(_feature_table.size(), ~0);
+    for (const auto &item : _feature_table.t_to_id) {
+      feature_offsets[item.second] = feature_str_buf.size();
+      feature_str_lens[item.second] = item.first.size();
+      feature_str_buf += item.first;
+    }
+
+    std::vector<feature_t> features;
+    features.assign(_feature_table.size(), {});
+    for (const auto &item : feature_id_map.t_to_id) {
+      const int pos_id = std::get<1>(item.first); 
+      const int feature_id = std::get<0>(item.first);
+      if ((pos_id < 0) || (pos_id >= pos_offsets.size())){
+        ERROR_AND_RETURN("Invalid pos_id: " << pos_id);
+      }
+      if ((feature_id < 0) || (feature_id >= feature_offsets.size())) {
+        ERROR_AND_RETURN("Invalid feature_id: " << feature_id);
+      }
+      feature_t &wf = features[size_t(item.second)];
+      wf.id = feature_id;
+
+      wf.pos_offset = pos_offsets[size_t(pos_id)];
+      wf.pos_str_len = pos_str_lens[size_t(pos_id)];
+
+      wf.feature_offset = feature_offsets[size_t(feature_id)];
+      wf.feature_str_len = feature_str_lens[size_t(feature_id)];
+      
+    }
+
+    return true;
+  }
+
+
+ private:
+  StrIdMap _pos_table;
+  StrIdMap _feature_table;
+
+  // key: single UTF-8 char id or POS id, value = (count, unique_id))
+  std::unordered_map<int, std::pair<int, int>> counters;
+};
 
 int main(int argc, char **argv) {
   if (argc < 3) {
@@ -737,6 +872,8 @@ int main(int argc, char **argv) {
 
   std::string vocab_filename = argv[1];
   std::string pos_tagged_filename = argv[2];
+
+  // 4 = Mecab dict style: 品詞,品詞細分類1,品詞細分類2,品詞細分類3
   int num_pos_fields = 4;
 
   if (argc > 3) {
@@ -794,7 +931,9 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (!train(lines, pos_tagged_lines, ',', num_pos_fields)) {
+  Trainer trainer;
+
+  if (!trainer.train(lines, pos_tagged_lines, ',', num_pos_fields)) {
     std::cerr << "Train failed.\n";
     exit(-1);
   }
