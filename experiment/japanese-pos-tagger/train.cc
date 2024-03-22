@@ -6,6 +6,16 @@
 #define NANOCSV_IMPLEMENTATION
 #include "nanocsv.h"
 
+#define ERROR_AND_RETURN(s)                         \
+  do {                                                   \
+    std::ostringstream ss_e;                             \
+    ss_e << "[error]"                                    \
+         << ":" << __func__ << "():" << __LINE__ << " "; \
+    ss_e << s << "\n";                                   \
+    std::cerr << ss_e.str();                             \
+    return false;                                        \
+  } while (0)
+
 static const char* kPOSDigit = "\x09\xE5\x90\x8D\xE8\xA9\x9E\x2C\xE6\x95\xB0\xE8\xA9\x9E\x2C\x2A\x2C\x2A";
 
 static const char* kPOSUnknown = "\x09\xE5\x90\x8D\xE8\xA9\x9E\x2C\xE6\x99\xAE\xE9\x80\x9A\xE5\x90\x8D\xE8\xA  9\x9E\x2C\x2A\x2C\x2A";
@@ -195,7 +205,7 @@ struct IdMap {
 
     size_t id = id_to_t.size();
 
-    if (id < (std::numeric_limits<int>::max)()) {
+    if (id > (std::numeric_limits<int>::max)()) {
       return false;
     }
 
@@ -214,7 +224,7 @@ struct IdMap {
 
     size_t id = id_to_t.size();
 
-    if (id < (std::numeric_limits<int>::max)()) {
+    if (id > (std::numeric_limits<int>::max)()) {
       return false;
     }
 
@@ -440,8 +450,7 @@ bool train(const std::vector<std::string> &lines,
 
     int pattern_id;
     if (!pattern_table.put({surface, -1}, pattern_id)) {
-      std::cerr << "Too many patterns.\n";
-      return false;
+      ERROR_AND_RETURN("Too many patterns.");
     }
 
     max_word_length = (std::max)(surface.size(), max_word_length);
@@ -486,8 +495,7 @@ bool train(const std::vector<std::string> &lines,
     std::string s = extract_utf8_char(kDigit, i, char_len);
     chars_table[s] = int(CharKind::KIND_DIGIT);
     if (!pattern_table.put({s, -1})) {
-      std::cerr << "Too many words.\n";
-      return false;
+      ERROR_AND_RETURN("Too many words.");
     }
   }
 
@@ -495,8 +503,7 @@ bool train(const std::vector<std::string> &lines,
     std::string s = extract_utf8_char(kAlphabet, i, char_len);
     chars_table[s] = int(CharKind::KIND_ALPHABET);
     if (!pattern_table.put({s, -1})) {
-      std::cerr << "Too many words.\n";
-      return false;
+      ERROR_AND_RETURN("Too many words.");
     }
   }
 
@@ -504,8 +511,7 @@ bool train(const std::vector<std::string> &lines,
     std::string s = extract_utf8_char(kKatakana, i, char_len);
     chars_table[s] = int(CharKind::KIND_KATAKANA);
     if (!pattern_table.put({s, -1})) {
-      std::cerr << "Too many words.\n";
-      return false;
+      ERROR_AND_RETURN("Too many words.");
     }
   }
 
@@ -528,7 +534,6 @@ bool train(const std::vector<std::string> &lines,
     }
 
     if (line.compare("EOS\n") == 0) {
-      std::string prev_pos = "\tBOS";
 
       //
       // Example:
@@ -558,8 +563,7 @@ bool train(const std::vector<std::string> &lines,
         const std::string &feature = ts.second;
         int feature_id{-1};
         if (!feature_table.get(feature, feature_id)) {
-          std::cerr << "id not found for feature string: " << feature << "\n";
-          return false;
+          ERROR_AND_RETURN("id not found for feature string: " << feature);
         }
 
         size_t shift = token.size();
@@ -575,15 +579,13 @@ bool train(const std::vector<std::string> &lines,
 
           int fragment_id{-1};
           if (!pattern_table.put({fragment, -1}, fragment_id)) {
-            std::cerr << "Failed to add fragment: " << fragment << "\n";
-            return false;
+            ERROR_AND_RETURN("Failed to add fragment: " << fragment);
           }
 
           int pattern_id{-1};
           if (!pattern_table.put({fragment, prev_pos_len}, pattern_id)) {
-            std::cerr << "Failed to add pattern: {" << fragment << ", "
-                      << prev_pos_len << "}\n";
-            return false;
+            ERROR_AND_RETURN("Failed to add pattern: {" << fragment << ", "
+                      << prev_pos_len << "}");
           }
 
           pattern_to_shift_feature_counts[fragment_id][{shift, feature_id}]++;
@@ -621,17 +623,15 @@ bool train(const std::vector<std::string> &lines,
           pos_counts[pos_id]++;
           int pi{-1};
           if (!pattern_table.put({"", prev_pos_id}, pi)) {
-            std::cerr << "Failed to add pattern: {\"\", " << prev_pos_id
-                      << "}\n";
-            return false;
+            ERROR_AND_RETURN("Failed to add pattern: {\"\", " << prev_pos_id
+                      << "}");
           }
 
           std::string feature_str = pos + ",*,*,*\n";  // TODO: strip newline?
 
           int feature_id{-1};
           if (!feature_table.put(feature_str, feature_id)) {
-            std::cerr << "Too many features\n";
-            return false;
+            ERROR_AND_RETURN("Too many features");
           }
 
           pattern_to_shift_feature_counts[pi][{0, feature_id}]++;
@@ -648,48 +648,11 @@ bool train(const std::vector<std::string> &lines,
       // Parse POS tagged line: SURAFACE\tFEATURE
       std::vector<std::string> tup = split(line, "\t");
       if (tup.size() != 2) {
-        std::cerr << "Invalid POS Tagged line:" << line << "\n";
-        return false;
+        ERROR_AND_RETURN("Invalid POS Tagged line:" << line);
       }
 
-#if 0
-      std::vector<std::string> fields =
-          parse_line(tup[1].c_str(), tup[1].size(), delimiter);
-
-      if (fields.size() < num_pos_fields) {
-        std::cerr << "Insufficient POS fields:" << tup[1] << "\n";
-        return false;
-      }
-
-      const std::string pos = join(fields, 1, num_pos_fields + 1, ',', '"');
-      const std::string feature = join(fields, 1, fields.size(), ',', '"');
-
-      feature_table.put(pos);
-      feature_table.put(feature);
-
-      int pos_id;
-      if (!feature_table.get(pos, pos_id)) {
-        std::cerr << "Internal error: POS " << pos
-                  << " not found in the table.\n";
-        return false;
-      }
-
-      int feature_id;
-      if (!feature_table.get(feature, feature_id)) {
-        std::cerr << "Internal error: feature " << feature
-                  << " not found in the table.\n";
-        return false;
-      }
-
-      token_and_pos_tag tok;
-      tok.token_len = tup[0].size();
-      tok.pos_id = pos_id;
-      tok.feature_id = feature_id;
-
-#else
       token_and_features.push_back({tup[0], tup[1]});
       sentence += tup[0];
-#endif
     }
   }
 
@@ -768,12 +731,17 @@ bool train(const std::vector<std::string> &lines,
 
 int main(int argc, char **argv) {
   if (argc < 3) {
-    std::cout << "Need input.vocab(csv) train.txt(POS tagged)\n";
+    std::cout << "Need input.vocab(csv) train.txt(POS tagged) [num_pos_fields]\n";
     exit(-1);
   }
 
   std::string vocab_filename = argv[1];
   std::string pos_tagged_filename = argv[2];
+  int num_pos_fields = 4;
+
+  if (argc > 3) {
+    num_pos_fields = std::stoi(argv[3]);
+  }
 
   nanocsv::ParseTextOption csv_option;
   csv_option.ignore_header = true;
@@ -794,17 +762,44 @@ int main(int argc, char **argv) {
 
   std::cout << "# of rows = " << csv.num_records
             << ", # of columns = " << csv.num_fields << "\n";
+
+  // construct string[](validated by nanocsv)
+  std::vector<std::string> lines;
   for (size_t row = 0; row < csv.num_records; row++) {
+    std::string line;
     for (size_t col = 0; col < csv.num_fields; col++) {
       if (col > 0) {
-        std::cout << ", ";
+        line += ",";
       }
 
-      std::cout << csv.values[row * csv.num_fields + col];
+      const std::string &field = csv.values[row * csv.num_fields + col];
+      if (field.find(",")) {
+        line += "\"" + field + "\"";
+      } else {
+        line += field;
+      }
     }
 
-    std::cout << "\n";
+    line += "\n"; // TODO: do not include newline.
+    lines.emplace_back(std::move(line));
   }
+
+  std::vector<std::string> pos_tagged_lines;
+  {
+    std::ifstream ifs(pos_tagged_filename);
+    std::string s;
+    while (std::getline(ifs, s)) {
+      // TODO: do not include newline
+      pos_tagged_lines.push_back(s + "\n");
+    }
+  }
+
+  if (!train(lines, pos_tagged_lines, ',', num_pos_fields)) {
+    std::cerr << "Train failed.\n";
+    exit(-1);
+  }
+
+  std::cout << "Train DONE!\n";
 
   return 0;
 }
