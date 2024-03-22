@@ -562,8 +562,8 @@ bool train(const std::vector<std::string> &lines,
         const std::string &token = ts.first;
         const std::string &feature = ts.second;
         int feature_id{-1};
-        if (!feature_table.get(feature, feature_id)) {
-          ERROR_AND_RETURN("id not found for feature string: " << feature);
+        if (!feature_table.put(feature, feature_id)) {
+          ERROR_AND_RETURN("Too many features");
         }
 
         size_t shift = token.size();
