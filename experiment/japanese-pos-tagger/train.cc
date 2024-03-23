@@ -4,9 +4,12 @@
 #include <unordered_map>
 
 // use common/zstd.h
-#include "safetensors.hh"
 #include "zstd.h"
 
+//
+#include "safetensors.hh"
+
+//
 #define NANOCSV_IMPLEMENTATION
 #include "nanocsv.h"
 
@@ -19,6 +22,98 @@
     std::cerr << ss_e.str();                             \
     return false;                                        \
   } while (0)
+
+//
+// Simple Naiive Implementation of Trie tree.
+//
+template<typename KeyType, typename ValueType>
+class NaiiveTrie
+{
+ public:
+  struct NaiiveTrieNode
+  {
+    std::map<KeyType, NaiiveTrieNode> children;
+    bool has_value{false};
+    ValueType value{};
+  };
+
+  bool update(const KeyType *key, const size_t key_len, const ValueType &value) {
+    if (!key) {
+      return false;
+    }
+
+    if (key_len == 0) {
+      return false;
+    }
+
+    NaiiveTrieNode *node = &_root;
+
+    for (size_t i = 0; i < key_len; i++) {
+      const KeyType token = key[i];
+      if (!node->children.count(token)) {
+        node->children[token] = NaiiveTrieNode();
+      }
+
+      node = &node->children[token];
+    }
+    node->has_value = true;
+    node->value = value;
+
+    return true;
+  }
+
+  bool exactMatch(const KeyType *key, const size_t key_len, ValueType &value_out) {
+    if (!key) {
+      return false;
+    }
+
+    if (key_len == 0) {
+      return false;
+    }
+
+    NaiiveTrieNode *node = &_root;
+
+    for (size_t i = 0; i < key_len; i++) {
+
+      const KeyType token = key[i];
+      if (!node->children.count(token)) {
+        return false;
+      }
+      node = &node->children[token];
+
+    }
+
+    if (node->has_value) {
+      value_out = node->value;
+      return true;
+    }
+
+    return false;
+  }
+
+  // TODO: erase()
+
+  size_t num_nodes_rec(const NaiiveTrieNode &node) {
+
+    size_t n = node.children.size();
+    for (const auto &child : node.children) {
+      n += num_nodes_rec(child.second);
+    }
+
+    return n;
+  }
+
+  size_t num_nodes() {
+
+    size_t n = num_nodes_rec(_root);
+
+    return n;
+  }
+
+
+ private:
+  NaiiveTrieNode _root;
+};
 
 struct feature_t {
   int id{-1};
@@ -745,6 +840,7 @@ class Trainer {
         int prev_pos_id = pattern.second;
         int p_id = item.second;
         int shift = int(p_str.size());
+        int count = 0;
 
         int feature_id{0};
 
@@ -781,8 +877,31 @@ class Trainer {
               ERROR_AND_RETURN("Too many features.");
             }
           } else {
+            // Unseen pattern
+            const auto &m = pattern_to_shift_feature_counts.at(p_id);
+            std::vector<int> shift_counts;
+            shift_counts.assign(max_word_length + 1, 0);
+
+            for (const auto &item : m) {
+              int _shift = std::get<0>(item.first);
+
+              shift_counts[_shift] += item.second;
+            }
+
+            shift = -std::distance(shift_counts.rend(),  std::max_element(shift_counts.rbegin(), shift_counts.rend())) - 1;
+
+            for (const auto &item : m) {
+              if ((std::get<0>(item.first) == shift) && (item.second > count)) {
+                count = item.second;
+                feature_id = std::get<1>(item.first);
+              }
+            }
+
             // TODO
+            // trav
           }
+
+
         }
       }
     }
