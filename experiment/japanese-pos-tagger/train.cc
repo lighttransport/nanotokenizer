@@ -3,13 +3,14 @@
 #include <limits>
 #include <unordered_map>
 
-#define SAFETENSORS_CPP_IMPLEMENTATION
+// use common/zstd.h
 #include "safetensors.hh"
+#include "zstd.h"
 
 #define NANOCSV_IMPLEMENTATION
 #include "nanocsv.h"
 
-#define ERROR_AND_RETURN(s)                         \
+#define ERROR_AND_RETURN(s)                              \
   do {                                                   \
     std::ostringstream ss_e;                             \
     ss_e << "[error]"                                    \
@@ -21,17 +22,22 @@
 
 struct feature_t {
   int id{-1};
-  uint16_t pos_str_len{0}; // Up to 16bit
-  uint16_t feature_str_len{0}; // Up to 16bit
+  uint16_t pos_str_len{0};      // Up to 16bit
+  uint16_t feature_str_len{0};  // Up to 16bit
   // Assume buffer is up to 4GB
-  uint32_t pos_offset{0}; // POS string offset bytes in the buffer
-  uint32_t feature_offset{0}; // Feature string offset bytes in the buffer
+  uint32_t pos_offset{0};      // POS string offset bytes in the buffer
+  uint32_t feature_offset{0};  // Feature string offset bytes in the buffer
 };
 
-static const char* kPOSDigit = "\x09\xE5\x90\x8D\xE8\xA9\x9E\x2C\xE6\x95\xB0\xE8\xA9\x9E\x2C\x2A\x2C\x2A";
+static const char *kPOSDigit =
+    "\x09\xE5\x90\x8D\xE8\xA9\x9E\x2C\xE6\x95\xB0\xE8\xA9\x9E\x2C\x2A\x2C\x2A";
 
-static const char* kPOSUnknown = "\x09\xE5\x90\x8D\xE8\xA9\x9E\x2C\xE6\x99\xAE\xE9\x80\x9A\xE5\x90\x8D\xE8\xA  9\x9E\x2C\x2A\x2C\x2A";
-static const char* kPOSSymbol = "\x09\xE7\x89\xB9\xE6\xAE\x8A\x2C\xE8\xA8\x98\xE5\x8F\xB7\x2C\x2A\x2C\x2A  ";
+static const char *kPOSUnknown =
+    "\x09\xE5\x90\x8D\xE8\xA9\x9E\x2C\xE6\x99\xAE\xE9\x80\x9A\xE5\x90\x8D\xE8"
+    "\xA  9\x9E\x2C\x2A\x2C\x2A";
+static const char *kPOSSymbol =
+    "\x09\xE7\x89\xB9\xE6\xAE\x8A\x2C\xE8\xA8\x98\xE5\x8F\xB7\x2C\x2A\x2C\x2A "
+    " ";
 
 // digit/alpha/katanaka
 const std::string kDigit =
@@ -431,12 +437,13 @@ bool extract_pos(const std::string &feature, std::string &pos,
   return true;
 }
 
-class Trainer
-{
+class Trainer {
  public:
+  Trainer(const char delimiter, const uint32_t num_pos_fields = 4)
+      : _delimiter(delimiter), _num_pos_fields(num_pos_fields) {}
+
   bool train(const std::vector<std::string> &lines,
-             const std::vector<std::string> &pos_tagged_lines,
-             const char delimiter, const uint32_t num_pos_fields = 4) {
+             const std::vector<std::string> &pos_tagged_lines) {
     std::map<std::string, int> chars_table;
     StrIdMap token_table;
     // StrIdMap word_table;
@@ -458,25 +465,25 @@ class Trainer
     _feature_table.clear();
 
     // hardcoded pos id
-    _pos_table.put("\tBOS"); // must be 0
-    _pos_table.put(kPOSUnknown); // 1
-    _pos_table.put(kPOSDigit); // 2
-    _pos_table.put(kPOSSymbol); // 3
+    _pos_table.put("\tBOS");      // must be id 0
+    _pos_table.put(kPOSUnknown);  // id 1
+    _pos_table.put(kPOSDigit);    // id 2
+    _pos_table.put(kPOSSymbol);   // id 3
     {
       int id{-1};
-      _pos_table.get("\tBOS",id);
+      _pos_table.get("\tBOS", id);
       if (id != 0) {
         ERROR_AND_RETURN("BOS id must be 0");
       }
-      _pos_table.get(kPOSUnknown,id);
+      _pos_table.get(kPOSUnknown, id);
       if (id != 1) {
         ERROR_AND_RETURN("Unknown POS id must be 1");
       }
-      _pos_table.get(kPOSDigit,id);
+      _pos_table.get(kPOSDigit, id);
       if (id != 2) {
         ERROR_AND_RETURN("Digit POS id must be 2");
       }
-      _pos_table.get(kPOSSymbol,id);
+      _pos_table.get(kPOSSymbol, id);
       if (id != 3) {
         ERROR_AND_RETURN("Symbol POS id must be 3");
       }
@@ -484,12 +491,11 @@ class Trainer
 
     for (const auto &it : lines) {
       std::vector<std::string> fields =
-          parse_line(it.c_str(), it.size(), delimiter);
+          parse_line(it.c_str(), it.size(), _delimiter);
 
       // at lest num_pos_fields + 1 fields must exist.
-      if (fields.size() < num_pos_fields + 1) {
-        std::cerr << "Insufficient fields in line: " << it << "\n";
-        return false;
+      if (fields.size() < _num_pos_fields + 1) {
+        ERROR_AND_RETURN("Insufficient fields in line: " << it);
       }
 
       const std::string &surface = fields[0];
@@ -503,7 +509,7 @@ class Trainer
 
       // POS fields.
       // e.g. 動詞,*,母音動詞,語幹
-      const std::string pos = join(fields, 1, num_pos_fields + 1, ',', '"');
+      const std::string pos = join(fields, 1, _num_pos_fields + 1, ',', '"');
 
       // full feature string.
       // e.g.
@@ -516,16 +522,12 @@ class Trainer
 
       int pos_id{-1};
       if (!_pos_table.get(pos, pos_id)) {
-        std::cerr << "Internal error: POS " << pos
-                  << " not found in the table.\n";
-        return false;
+        ERROR_AND_RETURN("POS not found: {" << pos);
       }
 
       int feature_id{-1};
       if (!_feature_table.get(feature, feature_id)) {
-        std::cerr << "Internal error: feature " << feature
-                  << " not found in the table.\n";
-        return false;
+        ERROR_AND_RETURN("Feature not found: {" << feature);
       }
 
       pattern_to_pos_and_feature_map[pattern_id][pos_id] = feature_id;
@@ -569,8 +571,8 @@ class Trainer
     // std::vector<std::array<int, 3>> pis;
     std::string sentence;
 
-    // key = pattern_id, value = (key = (pattern len(shift), feature_id), value =
-    // count)
+    // key = pattern_id, value = (key = (pattern len(shift), feature_id), value
+    // = count)
     std::map<int, std::map<std::pair<int, int>, int>>
         pattern_to_shift_feature_counts;
 
@@ -580,14 +582,13 @@ class Trainer
       }
 
       if (line.compare("EOS\n") == 0) {
-
         //
         // Example:
         //
         // tokens = ['吾輩', 'は', '猫', 'である']
         // sentence = '吾輩は猫である'
         //
-        // pattern_to_shift_feature_counts = 
+        // pattern_to_shift_feature_counts =
         //
         // [{'吾輩', -1} , feature_id, tokens[0].len]
         // [{'吾輩', pos0_id}', feature_id, tokens[0].len]
@@ -642,8 +643,8 @@ class Trainer
 
             int pattern_id{-1};
             if (!pattern_table.put({fragment, prev_pos_len}, pattern_id)) {
-              ERROR_AND_RETURN("Failed to add pattern: {" << fragment << ", "
-                        << prev_pos_len << "}");
+              ERROR_AND_RETURN("Failed to add pattern: {"
+                               << fragment << ", " << prev_pos_len << "}");
             }
 
             pattern_to_shift_feature_counts[fragment_id][{shift, feature_id}]++;
@@ -658,31 +659,30 @@ class Trainer
 
           int tok_id{-1};
           if (!pattern_table.put({token, -1}, tok_id)) {
-            std::cerr << "Failed to add pattern: {" << token << ", -1}\n";
-            return false;
+            ERROR_AND_RETURN("Failed to add pattern: {" << token << ", -1}");
           }
 
           // extract POS part from feature string.
           std::string pos;
           if (!extract_pos(feature, pos)) {
-            return false;
+            ERROR_AND_RETURN("Failed to extract POS string from feature");
           }
 
           int pos_id{-1};
           if (!_pos_table.put(pos, pos_id)) {
-            std::cerr << "Failed to add POS: " << pos << "\n";
-            return false;
+            ERROR_AND_RETURN("Failed to add POS: {" << pos);
           }
 
           // token is only seen in training data
           // Add it also to vocabs
           if ((tok_id >= num_seed_patterns) &&
-              (classify_char_kind(token, chars_table) != CharKind::KIND_DIGIT)) {
+              (classify_char_kind(token, chars_table) !=
+               CharKind::KIND_DIGIT)) {
             pos_counts[pos_id]++;
             int pi{-1};
             if (!pattern_table.put({"", prev_pos_id}, pi)) {
               ERROR_AND_RETURN("Failed to add pattern: {\"\", " << prev_pos_id
-                        << "}");
+                                                                << "}");
             }
 
             std::string feature_str = pos + ",*,*,*\n";  // TODO: strip newline?
@@ -716,14 +716,12 @@ class Trainer
 
     // prune redundant patterns
     {
-
       for (const auto &item : chars_table) {
         uint32_t len;
         uint32_t cp = to_codepoint(item.first.c_str(), len);
         if ((cp == ~0) || (len == 0) || (cp > kMaxCodePoint)) {
           // ???
-          std::cerr << "Invalid UTF8 character.\n";
-          return false;
+          ERROR_AND_RETURN("Invalid UTF8 character.");
         }
 
         uint32_t id = uint32_t(counters.size());
@@ -735,7 +733,7 @@ class Trainer
         counters[kMaxCodePoint + 1 + item.second] = {0, id};
       }
 
-      size_t max_pos_id;
+      size_t max_pos_id{0};
       for (const auto &item : _pos_table.t_to_id) {
         max_pos_id = (std::max)(size_t(item.second), max_pos_id);
       }
@@ -752,8 +750,9 @@ class Trainer
 
         if (!pattern_to_shift_feature_counts.count(p_id)) {
           // Pattern is not seen in training data.
-          if (p_id < num_seed_patterns) { // Pattern in input vocabs.
-            const std::map<int, int>& ps_map = pattern_to_pos_and_feature_map.at(p_id);
+          if (p_id < num_seed_patterns) {  // Pattern in input vocabs.
+            const std::map<int, int> &ps_map =
+                pattern_to_pos_and_feature_map.at(p_id);
             int pos_id{0};
 
             // Find the lowest count one
@@ -763,46 +762,71 @@ class Trainer
               }
             }
             feature_id = ps_map.find(pos_id)->second;
-          } else if (classify_char_kind(p_str, chars_table) == CharKind::KIND_DIGIT) {
+          } else if (classify_char_kind(p_str, chars_table) ==
+                     CharKind::KIND_DIGIT) {
             std::string feature = std::string(kPOSDigit) + ",*,*,*\n";
 
             if (!_feature_table.put(feature, feature_id)) {
-              std::cerr << "Too many features.\n";
-              return false;
+              ERROR_AND_RETURN("Too many features.");
             }
-          } else if (classify_char_kind(p_str, chars_table) != CharKind::KIND_OTHER) {
-            // TODO
+          } else if (classify_char_kind(p_str, chars_table) !=
+                     CharKind::KIND_OTHER) {
+            std::string pos_str;
+            if (!_pos_table.get(int(max_pos_id), pos_str)) {
+              ERROR_AND_RETURN("POS str not found for id: " << max_pos_id);
+            }
+
+            std::string feature = pos_str + "," + p_str + "," + p_str + ",*\n";
+            if (!_feature_table.put(feature, feature_id)) {
+              ERROR_AND_RETURN("Too many features.");
+            }
           } else {
             // TODO
-
           }
         }
-
       }
-
     }
-
-
 
     return true;
   }
 
-  bool write_patterns(const std::string &base_filename) {
+  bool write_patterns(const std::string &base_filename,
+                      bool compress_zstd = true) {
+    size_t data_offset = 0;
+    safetensors::safetensors_t st;
+
     FeatureIdMap feature_id_map;
-    feature_id_map.put({0, 1}); // (unknown, kPOSUnknown)
+    feature_id_map.put({0, 1});  // (unknown, kPOSUnknown) -> id 0
 
     // Single UTF-8 character to id table.
     // We use uint32 insted of uint16(in jagger), since it may not fit in 16bit.
     std::vector<int32_t> char_to_id;
-    char_to_id.assign(kMaxCodePoint + 1 + _pos_table.size(), -1); // -1 = invalid
-    char_to_id[0] = 0; // BOS 
+    char_to_id.assign(kMaxCodePoint + 1 + _pos_table.size(),
+                      -1);  // -1 = invalid
+    char_to_id[0] = 0;      // BOS
     for (size_t i = 1; i < char_to_id.size(); i++) {
       if (counters.count(i)) {
-        const auto &item = counters.at(i); 
-        if (item.first) { // has counts
+        const auto &item = counters.at(i);
+        if (item.first) {  // has counts
           char_to_id[item.second] = int(i);
         }
       }
+    }
+
+    {
+      size_t sz = char_to_id.size() * sizeof(int32_t);
+      st.storage.resize(data_offset + sz);
+      memcpy(st.storage.data() + data_offset, char_to_id.data(), sz);
+
+      safetensors::tensor_t tensor;
+      tensor.dtype = safetensors::dtype::kUINT8;  // Use UINT32?
+      tensor.data_offsets[0] = data_offset;
+      tensor.data_offsets[1] = data_offset + sz;
+      tensor.shape.resize(1);
+      tensor.shape[0] = sz;
+      st.tensors.insert("char_to_id", tensor);
+
+      data_offset += sz;
     }
 
     //
@@ -817,8 +841,24 @@ class Trainer
     for (const auto &item : _pos_table.t_to_id) {
       pos_offsets[item.second] = feature_str_buf.size();
       pos_str_lens[item.second] = item.first.size();
-    
+
       feature_str_buf += item.first;
+    }
+
+    {
+      size_t sz = feature_str_buf.size();
+      st.storage.resize(data_offset + sz);
+      memcpy(st.storage.data() + data_offset, feature_str_buf.data(), sz);
+
+      safetensors::tensor_t tensor;
+      tensor.dtype = safetensors::dtype::kUINT8;
+      tensor.data_offsets[0] = data_offset;
+      tensor.data_offsets[1] = data_offset + sz;
+      tensor.shape.resize(1);
+      tensor.shape[0] = sz;
+      st.tensors.insert("feature_strings", tensor);
+
+      data_offset += sz;
     }
 
     std::vector<size_t> feature_offsets;
@@ -833,9 +873,9 @@ class Trainer
     std::vector<feature_t> features;
     features.assign(_feature_table.size(), {});
     for (const auto &item : feature_id_map.t_to_id) {
-      const int pos_id = std::get<1>(item.first); 
+      const int pos_id = std::get<1>(item.first);
       const int feature_id = std::get<0>(item.first);
-      if ((pos_id < 0) || (pos_id >= pos_offsets.size())){
+      if ((pos_id < 0) || (pos_id >= pos_offsets.size())) {
         ERROR_AND_RETURN("Invalid pos_id: " << pos_id);
       }
       if ((feature_id < 0) || (feature_id >= feature_offsets.size())) {
@@ -849,16 +889,37 @@ class Trainer
 
       wf.feature_offset = feature_offsets[size_t(feature_id)];
       wf.feature_str_len = feature_str_lens[size_t(feature_id)];
-      
+    }
+
+    {
+      size_t sz = features.size() * sizeof(feature_t);
+      st.storage.resize(data_offset + sz);
+      memcpy(st.storage.data() + data_offset, features.data(), sz);
+
+      safetensors::tensor_t tensor;
+      tensor.dtype = safetensors::dtype::kUINT8;
+      tensor.data_offsets[0] = data_offset;
+      tensor.data_offsets[1] = data_offset + sz;
+      tensor.shape.resize(1);
+      tensor.shape[0] = sz;
+      st.tensors.insert("features", tensor);
+
+      data_offset += sz;
+    }
+
+    {
+      st.metadata.insert("creator", "nanotokenizer");
+      st.metadata.insert("num_pos_fields", std::to_string(_num_pos_fields));
     }
 
     return true;
   }
 
-
  private:
   StrIdMap _pos_table;
   StrIdMap _feature_table;
+  char _delimiter{','};
+  int _num_pos_fields{4};
 
   // key: single UTF-8 char id or POS id, value = (count, unique_id))
   std::unordered_map<int, std::pair<int, int>> counters;
@@ -866,7 +927,8 @@ class Trainer
 
 int main(int argc, char **argv) {
   if (argc < 3) {
-    std::cout << "Need input.vocab(csv) train.txt(POS tagged) [num_pos_fields]\n";
+    std::cout
+        << "Need input.vocab(csv) train.txt(POS tagged) [num_pos_fields]\n";
     exit(-1);
   }
 
@@ -917,7 +979,7 @@ int main(int argc, char **argv) {
       }
     }
 
-    line += "\n"; // TODO: do not include newline.
+    line += "\n";  // TODO: do not include newline.
     lines.emplace_back(std::move(line));
   }
 
@@ -931,9 +993,9 @@ int main(int argc, char **argv) {
     }
   }
 
-  Trainer trainer;
+  Trainer trainer(',', num_pos_fields);
 
-  if (!trainer.train(lines, pos_tagged_lines, ',', num_pos_fields)) {
+  if (!trainer.train(lines, pos_tagged_lines)) {
     std::cerr << "Train failed.\n";
     exit(-1);
   }
