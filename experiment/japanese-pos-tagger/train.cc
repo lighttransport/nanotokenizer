@@ -46,7 +46,7 @@ class NaiiveTrie
   };
 
   struct TraverseNode {
-    NaiiveTrieNode *node{nullptr};
+    const NaiiveTrieNode *node{nullptr};
     int depth{0}; // corresponding Trie tree depth(0 = root)
   };
 
@@ -118,7 +118,7 @@ class NaiiveTrie
       if (!node->children.count(token)) {
         return TraverseResult::FailAtIntermediate;
       }
-      node = &node->children[token];
+      node = &node->children.at(token);
 
       last_traversed_node.node = node;
       last_traversed_node.depth++;
@@ -463,7 +463,7 @@ struct IdMap {
 };
 
 using StrIdMap = IdMap<std::string>;
-using PatternIdMap = IdMap<std::pair<std::string, int>>;  // <str, len>
+using PatternIdMap = IdMap<std::pair<std::string, int>>;  // <str, prev_pos_id>
 using FeatureIdMap = IdMap<std::pair<int, int>>;  // <feature_id, pos_id>
 
 static inline bool is_line_ending(const char *p, size_t i, size_t end_i) {
@@ -623,7 +623,6 @@ class Trainer {
              const std::vector<std::string> &pos_tagged_lines) {
     std::map<std::string, int> chars_table;
     StrIdMap token_table;
-    // StrIdMap word_table;
     PatternIdMap pattern_table;
 
     // Maximum word length(in bytes) in vocab.
@@ -802,9 +801,8 @@ class Trainer {
             ERROR_AND_RETURN("Too many features");
           }
 
-          size_t shift = token.size();
-
           // TODO: limit shift amount.
+          size_t shift = token.size();
 
           for (size_t sent_len = shift;
                (sent_loc + sent_len <= sentence.size()) &&
@@ -903,13 +901,13 @@ class Trainer {
           ERROR_AND_RETURN("Invalid UTF8 character.");
         }
 
-        uint32_t id = uint32_t(counters.size());
-        counters[cp] = {0, id};
+        uint32_t id = uint32_t(_counters.size());
+        _counters[cp] = {0, id};
       }
 
       for (const auto &item : _pos_table.t_to_id) {
-        uint32_t id = uint32_t(counters.size());
-        counters[kMaxCodePoint + 1 + item.second] = {0, id};
+        uint32_t id = uint32_t(_counters.size());
+        _counters[kMaxCodePoint + 1 + item.second] = {0, id};
       }
 
       size_t max_pos_id{0};
@@ -918,12 +916,12 @@ class Trainer {
       }
 
       for (const auto &item : pattern_table.t_to_id) {
-        const std::pair<std::string, int> &pattern = item.first;
-        const std::string &p_str = pattern.first;
+        const std::pair<std::string, int> &pattern = item.first; // <pattern_str, prev_pos_id>
+        const std::string &pattern_str = pattern.first;
 
         int prev_pos_id = pattern.second;
         int p_id = item.second;
-        int shift = int(p_str.size());
+        int shift = int(pattern_str.size());
         int count = 0;
 
         int feature_id{0};
@@ -935,28 +933,28 @@ class Trainer {
                 pattern_to_pos_and_feature_map.at(p_id);
             int pos_id{0};
 
-            // Find the lowest count one
+            // Find the lowest count
             for (const auto &ps : ps_map) {
-              if (counters[ps.first] >= counters[pos_id]) {
+              if (_counters[ps.first] >= _counters[pos_id]) {
                 pos_id = ps.first;
               }
             }
             feature_id = ps_map.find(pos_id)->second;
-          } else if (classify_char_kind(p_str, chars_table) ==
+          } else if (classify_char_kind(pattern_str, chars_table) ==
                      CharKind::KIND_DIGIT) {
             std::string feature = std::string(kPOSDigit) + ",*,*,*\n";
 
             if (!_feature_table.put(feature, feature_id)) {
               ERROR_AND_RETURN("Too many features.");
             }
-          } else if (classify_char_kind(p_str, chars_table) !=
+          } else if (classify_char_kind(pattern_str, chars_table) !=
                      CharKind::KIND_OTHER) {
             std::string pos_str;
             if (!_pos_table.get(int(max_pos_id), pos_str)) {
               ERROR_AND_RETURN("POS str not found for id: " << max_pos_id);
             }
 
-            std::string feature = pos_str + "," + p_str + "," + p_str + ",*\n";
+            std::string feature = pos_str + "," + pattern_str + "," + pattern_str + ",*\n";
             if (!_feature_table.put(feature, feature_id)) {
               ERROR_AND_RETURN("Too many features.");
             }
@@ -990,27 +988,27 @@ class Trainer {
           }
 
           // Traverse Trie for each single char.
-          NaiiveTrie::TraverseNode from_node;
+          NaiiveTrie<char, int>::TraverseNode from_node;
           from_node.node = nullptr; // = root
           int pattern_id{-1};
 
-          for (size_t key_pos = 0; key_pos = p_str.size(); key_pos++) {
+          for (size_t key_pos = 0; key_pos < pattern_str.size(); key_pos++) {
             from_node.depth = key_pos;
 
-            NaiiveTrie::TraverseNode traversed_node;
+            NaiiveTrie<char, int>::TraverseNode traversed_node;
             int value;
             size_t key_len = key_pos + 1;
 
             //
             // traverse [key_pos, key_pos+1) Trie node.
             //
-            auto trav_result = pattern_trie.traverse(p_str.c_str(), key_len, /* out */value, /* out */traversed_node, &from_node);
-            if (trav_result == NaiiveTrie::TraverseResult::InvalidArg) {
+            auto trav_result = pattern_trie.traverse(pattern_str.c_str(), key_len, /* out */value, /* out */traversed_node, &from_node);
+            if (trav_result == NaiiveTrie<char, int>::TraverseResult::InvalidArg) {
               ERROR_AND_RETURN("Invalid call of NaiiveTrie::traverse().");
-            } else if (trav_result == NaiiveTrie::TraverseResult::FailAtLeaf) {
-              from_node.node = traveresed_node.node;
+            } else if (trav_result == NaiiveTrie<char, int>::TraverseResult::FailAtLeaf) {
+              from_node.node = traversed_node.node;
               continue;
-            } else if (trav_result == NaiiveTrie::TraverseResult::FailAtIntermediate) {
+            } else if (trav_result == NaiiveTrie<char, int>::TraverseResult::FailAtIntermediate) {
               break;
             } else {
               // Success
@@ -1018,15 +1016,50 @@ class Trainer {
             }
           }
 
-          if (_patterns.count(pattern_id)) {
-            const pattern_t &pat = _patterns.at(pattern_id);
+          if (pattern_id > -1) {
+            const pattern_t &pat = _patterns[size_t(pattern_id)];
             if ((shift == pat.shift) && (feature_id == pat.feature_id)) {
               continue;
             }
           }
+
         }
 
-        // TODO
+        // Count each character of pattern string.
+        for (size_t s = 0; s < pattern_str.size(); ) {
+          uint32_t char_len{0};
+          uint32_t cp = to_codepoint(&pattern_str[s], char_len);
+          if ((cp == ~0) || (char_len == 0)) {
+            ERROR_AND_RETURN("Invalid UTF8 character in pattern string.");
+          }
+          _counters[cp].first += count + 1;
+          s += char_len;
+        }
+
+        if (prev_pos_id != -1) {
+          _counters[kMaxCodePoint + 1 + prev_pos_id].first += count + 1;
+        } else {
+          // surface only(BOS) pattern
+          int pattern_id = int(_patterns.size());
+          if (!pattern_trie.update(pattern_str.c_str(), pattern_str.size(), pattern_id)) {
+            ERROR_AND_RETURN("Internal error: Patten Trie update failed.");
+          }
+        }
+
+        CharKind char_kind = CharKind::KIND_OTHER;
+        if (shift > 0) {
+          std::string prefix = pattern_str.substr(0, shift);
+          char_kind = classify_char_kind(prefix, chars_table);
+        }
+
+        pattern_t pt;
+        pt.surface = pattern_str;
+        pt.prev_pos_id = prev_pos_id;
+        pt.char_kind = int(char_kind);
+        pt.count = count;
+        pt.shift = shift;
+        pt.feature_id = feature_id;
+        _patterns.emplace_back(pt);
 
       }
     }
@@ -1049,8 +1082,8 @@ class Trainer {
                       -1);  // -1 = invalid
     char_to_id[0] = 0;      // BOS
     for (size_t i = 1; i < char_to_id.size(); i++) {
-      if (counters.count(i)) {
-        const auto &item = counters.at(i);
+      if (_counters.count(i)) {
+        const auto &item = _counters.at(i);
         if (item.first) {  // has counts
           char_to_id[item.second] = int(i);
         }
@@ -1166,8 +1199,7 @@ class Trainer {
   int _num_pos_fields{4};
 
 
-  // key: pattern_id, value: pattern
-  std::map<int, pattern_t> _patterns;
+  std::vector<pattern_t> _patterns;
 
   // key: single UTF-8 char id or POS id, value = (count, unique_id))
   std::unordered_map<int, std::pair<int, int>> _counters;
