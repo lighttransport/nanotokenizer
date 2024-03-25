@@ -30,11 +30,24 @@ template<typename KeyType, typename ValueType>
 class NaiiveTrie
 {
  public:
+
+  enum class TraverseResult {
+    Success = 0,
+    FailAtLeaf = -1,
+    FailAtIntermediate = -2,
+    InvalidArg = -3,
+  };
+
   struct NaiiveTrieNode
   {
     std::map<KeyType, NaiiveTrieNode> children;
     bool has_value{false};
     ValueType value{};
+  };
+
+  struct TraverseNode {
+    NaiiveTrieNode *node{nullptr};
+    int depth{0}; // corresponding Trie tree depth(0 = root)
   };
 
   bool update(const KeyType *key, const size_t key_len, const ValueType &value) {
@@ -61,6 +74,66 @@ class NaiiveTrie
 
     return true;
   }
+
+  ///
+  /// Traverse Trie tree.
+  ///
+  /// When `from_node` is provided, traverse Trie tree from that.
+  /// It returns the pointer of the last traversed node.
+  ///
+  /// @param[in] key Key
+  /// @param[in] key_len Key length
+  /// @param[out] value_out Value of corresponding key(When TraverseResult::Succes)
+  /// @param[out] last_traversed_node Lastly traversed node.
+  /// @param[in] from_node Traverse Trie trie from given node. nullptr = Traverse from root
+  ///
+  /// Return TraverseResult code.
+  ///
+  /// NOTE: the pointer address of `last_traversed_node`  would change when `update` is called subsequently.
+  /// Thus the app should not reuse the pointer address when the code is calling `traverse() -> update() -> traverse()`.
+  ///
+  TraverseResult traverse(const KeyType *key, const size_t key_len, ValueType &value_out, TraverseNode &last_traversed_node, const TraverseNode *from_node = nullptr) {
+
+    if (!key) {
+      return TraverseResult::InvalidArg;
+    }
+
+    if (key_len == 0) {
+      return TraverseResult::InvalidArg;
+    }
+
+    const NaiiveTrieNode *node = (from_node && from_node->node) ? from_node->node : &_root;
+    size_t depth = from_node ? from_node->depth : 0;
+
+    if (depth >= key_len) {
+      return TraverseResult::InvalidArg;
+    }
+
+    last_traversed_node.node = node;
+    last_traversed_node.depth = depth;
+
+    for (size_t i = depth; i < key_len; i++) {
+
+      const KeyType token = key[i];
+      if (!node->children.count(token)) {
+        return TraverseResult::FailAtIntermediate;
+      }
+      node = &node->children[token];
+
+      last_traversed_node.node = node;
+      last_traversed_node.depth++;
+    }
+
+    if (node->has_value) {
+      value_out = node->value;
+      return TraverseResult::Success;
+    }
+
+    return TraverseResult::FailAtLeaf;
+
+
+  }
+
 
   bool exactMatch(const KeyType *key, const size_t key_len, ValueType &value_out) {
     if (!key) {
@@ -122,6 +195,15 @@ struct feature_t {
   // Assume buffer is up to 4GB
   uint32_t pos_offset{0};      // POS string offset bytes in the buffer
   uint32_t feature_offset{0};  // Feature string offset bytes in the buffer
+};
+
+struct pattern_t {
+  std::string surface;
+  int prev_pos_id{-1};
+  int count{0};
+  int32_t shift{0};
+  int32_t char_kind{0}; // we can use uint8
+  int32_t feature_id{-1};
 };
 
 static const char *kPOSDigit =
@@ -811,6 +893,8 @@ class Trainer {
 
     // prune redundant patterns
     {
+      NaiiveTrie<char, int> pattern_trie;
+
       for (const auto &item : chars_table) {
         uint32_t len;
         uint32_t cp = to_codepoint(item.first.c_str(), len);
@@ -877,32 +961,73 @@ class Trainer {
               ERROR_AND_RETURN("Too many features.");
             }
           } else {
-            // Unseen pattern
-            const auto &m = pattern_to_shift_feature_counts.at(p_id);
-            std::vector<int> shift_counts;
-            shift_counts.assign(max_word_length + 1, 0);
+            std::string feature = std::string(kPOSSymbol) + ",*,*,*\n";
 
-            for (const auto &item : m) {
-              int _shift = std::get<0>(item.first);
-
-              shift_counts[_shift] += item.second;
+            if (!_feature_table.put(feature, feature_id)) {
+              ERROR_AND_RETURN("Too many features.");
             }
-
-            shift = -std::distance(shift_counts.rend(),  std::max_element(shift_counts.rbegin(), shift_counts.rend())) - 1;
-
-            for (const auto &item : m) {
-              if ((std::get<0>(item.first) == shift) && (item.second > count)) {
-                count = item.second;
-                feature_id = std::get<1>(item.first);
-              }
-            }
-
-            // TODO
-            // trav
           }
 
+        } else {
+          // Unseen pattern
+          const auto &m = pattern_to_shift_feature_counts.at(p_id);
+          std::vector<int> shift_counts;
+          shift_counts.assign(max_word_length + 1, 0);
 
+          for (const auto &item : m) {
+            int _shift = std::get<0>(item.first);
+
+            shift_counts[_shift] += item.second;
+          }
+
+          shift = -std::distance(shift_counts.rend(),  std::max_element(shift_counts.rbegin(), shift_counts.rend())) - 1;
+
+          for (const auto &item : m) {
+            if ((std::get<0>(item.first) == shift) && (item.second > count)) {
+              count = item.second;
+              feature_id = std::get<1>(item.first);
+            }
+          }
+
+          // Traverse Trie for each single char.
+          NaiiveTrie::TraverseNode from_node;
+          from_node.node = nullptr; // = root
+          int pattern_id{-1};
+
+          for (size_t key_pos = 0; key_pos = p_str.size(); key_pos++) {
+            from_node.depth = key_pos;
+
+            NaiiveTrie::TraverseNode traversed_node;
+            int value;
+            size_t key_len = key_pos + 1;
+
+            //
+            // traverse [key_pos, key_pos+1) Trie node.
+            //
+            auto trav_result = pattern_trie.traverse(p_str.c_str(), key_len, /* out */value, /* out */traversed_node, &from_node);
+            if (trav_result == NaiiveTrie::TraverseResult::InvalidArg) {
+              ERROR_AND_RETURN("Invalid call of NaiiveTrie::traverse().");
+            } else if (trav_result == NaiiveTrie::TraverseResult::FailAtLeaf) {
+              from_node.node = traveresed_node.node;
+              continue;
+            } else if (trav_result == NaiiveTrie::TraverseResult::FailAtIntermediate) {
+              break;
+            } else {
+              // Success
+              pattern_id = value;
+            }
+          }
+
+          if (_patterns.count(pattern_id)) {
+            const pattern_t &pat = _patterns.at(pattern_id);
+            if ((shift == pat.shift) && (feature_id == pat.feature_id)) {
+              continue;
+            }
+          }
         }
+
+        // TODO
+
       }
     }
 
@@ -1040,8 +1165,12 @@ class Trainer {
   char _delimiter{','};
   int _num_pos_fields{4};
 
+
+  // key: pattern_id, value: pattern
+  std::map<int, pattern_t> _patterns;
+
   // key: single UTF-8 char id or POS id, value = (count, unique_id))
-  std::unordered_map<int, std::pair<int, int>> counters;
+  std::unordered_map<int, std::pair<int, int>> _counters;
 };
 
 int main(int argc, char **argv) {
