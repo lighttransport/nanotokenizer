@@ -1090,6 +1090,40 @@ class Trainer {
       }
     }
 
+    // Sort patterns based on count, then string(lexicologically)
+    std::sort(_patterns.begin(), _patterns.end(), [](const pattern_t &a, const pattern_t &b) {
+      if (a.count == b.count) {
+        return a.surface <  b.surface;
+      } else {
+        return a.count < b.count;
+      }
+    });
+
+    for (const auto &it : _patterns) {
+      // separator: \t
+      // count, surface, prev_pos, shift, char_kind, feature 
+      std::string line;
+      line = std::to_string(it.count);
+      line += "\t" + it.surface;
+      if (it.prev_pos_id < 0) {
+        line += "\t";
+      } else {
+        std::string pos_str;
+        if (!pos_table.get(it.prev_pos_id, pos_str)) {
+          ERROR_AND_RETURN("Unknown POS string id: " << it.prev_pos_id);
+        }
+        line += pos_str;
+      }
+      line += "\t" + std::to_string(it.shift);
+      std::string feature_str;
+      if (feature_table.get(it.feature_id, feature_str)) {
+        ERROR_AND_RETURN("Unknown feature string id: " << it.feature_id);
+      }
+      // TODO: add '\t' separator
+      line += feature_str;
+    }
+
+
     {
       size_t sz = char_to_id.size() * sizeof(int32_t);
       st.storage.resize(data_offset + sz);
