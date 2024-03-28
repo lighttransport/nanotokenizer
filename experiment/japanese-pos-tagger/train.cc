@@ -1067,8 +1067,38 @@ class Trainer {
     return true;
   }
 
-  bool write_patterns(const std::string &base_filename,
-                      bool compress_zstd = true) {
+  bool save_patterns(std::ofstream &ofs) {
+
+    for (const auto &it : _patterns) {
+      // separator: \t
+      // count, surface, prev_pos, shift, char_kind, feature
+      std::string line;
+      line = std::to_string(it.count);
+      line += "\t" + it.surface;
+      if (it.prev_pos_id < 0) {
+        line += "\t";
+      } else {
+        std::string pos_str;
+        if (!_pos_table.get(it.prev_pos_id, pos_str)) {
+          ERROR_AND_RETURN("Unknown POS string id: " << it.prev_pos_id);
+        }
+        line += pos_str;
+      }
+      line += "\t" + std::to_string(it.shift);
+      std::string feature_str;
+      if (_feature_table.get(it.feature_id, feature_str)) {
+        ERROR_AND_RETURN("Unknown feature string id: " << it.feature_id);
+      }
+      // TODO: add '\t' separator
+      line += feature_str; // feature_str includes '\n'
+
+      ofs << line;
+    }
+
+    return true;
+  }
+
+  bool save_pretrained(const std::string &base_filename) {
     size_t data_offset = 0;
     safetensors::safetensors_t st;
 
@@ -1090,37 +1120,24 @@ class Trainer {
       }
     }
 
-    // Sort patterns based on count, then string(lexicologically)
-    std::sort(_patterns.begin(), _patterns.end(), [](const pattern_t &a, const pattern_t &b) {
-      if (a.count == b.count) {
-        return a.surface <  b.surface;
-      } else {
-        return a.count < b.count;
-      }
-    });
-
-    for (const auto &it : _patterns) {
-      // separator: \t
-      // count, surface, prev_pos, shift, char_kind, feature 
-      std::string line;
-      line = std::to_string(it.count);
-      line += "\t" + it.surface;
-      if (it.prev_pos_id < 0) {
-        line += "\t";
-      } else {
-        std::string pos_str;
-        if (!pos_table.get(it.prev_pos_id, pos_str)) {
-          ERROR_AND_RETURN("Unknown POS string id: " << it.prev_pos_id);
+    { // patterns file
+      // Sort patterns based on count, then string(lexicologically)
+      std::sort(_patterns.begin(), _patterns.end(), [](const pattern_t &a, const pattern_t &b) {
+        if (a.count == b.count) {
+          return a.surface <  b.surface;
+        } else {
+          return a.count < b.count;
         }
-        line += pos_str;
+      });
+
+      std::ofstream ofs(base_filename);
+      if (!ofs) {
+        ERROR_AND_RETURN("Failed to open file for write: " << base_filename);
       }
-      line += "\t" + std::to_string(it.shift);
-      std::string feature_str;
-      if (feature_table.get(it.feature_id, feature_str)) {
-        ERROR_AND_RETURN("Unknown feature string id: " << it.feature_id);
+
+      if (!save_patterns(ofs)) {
+        ERROR_AND_RETURN("Failed to save `patterns` to file: " << base_filename);
       }
-      // TODO: add '\t' separator
-      line += feature_str;
     }
 
 
@@ -1218,6 +1235,8 @@ class Trainer {
       data_offset += sz;
     }
 
+    // TODO: Save Trie data
+
     {
       st.metadata.insert("creator", "nanotokenizer");
       st.metadata.insert("num_pos_fields", std::to_string(_num_pos_fields));
@@ -1240,20 +1259,21 @@ class Trainer {
 };
 
 int main(int argc, char **argv) {
-  if (argc < 3) {
+  if (argc < 4) {
     std::cout
-        << "Need input.vocab(csv) train.txt(POS tagged) [num_pos_fields]\n";
+        << "Need input.vocab(csv) train.txt(POS tagged) output_basename [num_pos_fields]\n";
     exit(-1);
   }
 
   std::string vocab_filename = argv[1];
   std::string pos_tagged_filename = argv[2];
+  std::string output_basename = argv[3];
 
   // 4 = Mecab dict style: 品詞,品詞細分類1,品詞細分類2,品詞細分類3
   int num_pos_fields = 4;
 
-  if (argc > 3) {
-    num_pos_fields = std::stoi(argv[3]);
+  if (argc > 4) {
+    num_pos_fields = std::stoi(argv[4]);
   }
 
   nanocsv::ParseTextOption csv_option;
@@ -1311,6 +1331,11 @@ int main(int argc, char **argv) {
 
   if (!trainer.train(lines, pos_tagged_lines)) {
     std::cerr << "Train failed.\n";
+    exit(-1);
+  }
+
+  if (!trainer.save_pretrained(output_basename)) {
+    std::cerr << "Failed to save pretrained data.\n";
     exit(-1);
   }
 
