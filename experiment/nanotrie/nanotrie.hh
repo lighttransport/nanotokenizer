@@ -62,6 +62,14 @@ inline bool has_prefix(const KeyType *s, const size_t s_len, const KeyType *pref
 template <typename KeyType, typename ValueType>
 class Trie {
  public:
+  // MSB 3 bit
+  enum class NodeType {
+    NODE_LEAF = 0x4 << 28, // 100
+    NODE_ARRAY = 0x5 << 28, // 101: for small sized items. items are not sorted.
+    NODE_SORTED_ARRAY = 0x6 << 28, // 110: for middle sized items. items are sorted. so use binary search to find an item.
+    NODE_HASHMAP = 0x7 << 28  // 111: for large sized items. Use nanohashmap.
+  };
+
   static_assert(
       sizeof(ValueType) >= sizeof(int32_t),
       "sizeof(ValueType) must be equal to or larger than sizeof(int)");
@@ -79,10 +87,22 @@ class Trie {
 
   struct inode {
     //ValueType offset{0}; // offset or value
+    //
     uint32_t offset_to_hashes{0}; // array index to `hashes`
-    // < -1 : leaf node
-    // -1 or > 0 : has child
-    // >= 0 : has sibling(index to sibling(neighbor) node)
+
+    // for negative values.
+    //
+    // +----+--------------+
+    // | ty | payload      |
+    // +----+--------------+
+    //
+    // MSB 3 bit  : NodeType
+    // LSB 29 bit : Payload(e.g. # of array items)
+    //
+    // for 0 or positive values
+    //
+    // - index to sibling(neighbor) node
+
     int jump{-1};
   };
 
@@ -172,13 +192,13 @@ class Trie {
 
     //
     // Type of node is based on # of siblings and has child or not.
-    // 
-    // - Terminal(leaf node): 
+    //
+    // - Terminal(leaf node):
     // - No siblings but has child: Create node with single token.
     // - Small # of siblings: Use simple array and do linear search.
     // - Other: Use tokenhashmap.
     //
-   
+
     // right_idx is exclusive
     // return false when invalid left_idx/right_idx combination.
     auto get_next_subtree = [&keys, &key_lens](const uint32_t left_idx, const uint32_t right_idx, uint32_t &subtree_idx) -> bool {
