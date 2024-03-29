@@ -23,6 +23,14 @@
     return false;                                        \
   } while (0)
 
+#define DCOUT(s)                              \
+  do {                                                   \
+    std::ostringstream ss_e;                             \
+    ss_e << __func__ << "():" << __LINE__ << " "; \
+    ss_e << s << "\n";                                   \
+    std::cout << ss_e.str();                             \
+  } while (0)
+
 //
 // Simple Naiive Implementation of Trie tree.
 //
@@ -1086,10 +1094,11 @@ class Trainer {
       }
       line += "\t" + std::to_string(it.shift);
       std::string feature_str;
-      if (_feature_table.get(it.feature_id, feature_str)) {
+      if (!_feature_table.get(it.feature_id, feature_str)) {
         ERROR_AND_RETURN("Unknown feature string id: " << it.feature_id);
       }
-      // TODO: add '\t' separator
+      line += "\t" + std::to_string(static_cast<int>(it.char_kind));
+      // TODO: add '\t' separator?
       line += feature_str; // feature_str includes '\n'
 
       ofs << line;
@@ -1122,7 +1131,7 @@ class Trainer {
 
     { // patterns file
       // Sort patterns based on count, then string(lexicologically)
-      std::sort(_patterns.begin(), _patterns.end(), [](const pattern_t &a, const pattern_t &b) {
+      std::sort(_patterns.rbegin(), _patterns.rend(), [](const pattern_t &a, const pattern_t &b) {
         if (a.count == b.count) {
           return a.surface <  b.surface;
         } else {
@@ -1192,23 +1201,33 @@ class Trainer {
     std::vector<size_t> feature_offsets;
     std::vector<size_t> feature_str_lens;
     feature_offsets.assign(_feature_table.size(), ~0);
+    feature_str_lens.assign(_feature_table.size(), 0);
+
     for (const auto &item : _feature_table.t_to_id) {
       feature_offsets[item.second] = feature_str_buf.size();
       feature_str_lens[item.second] = item.first.size();
       feature_str_buf += item.first;
     }
+    //DCOUT("feature_offsets.size = " << feature_offsets.size());
+    size_t num_feature_offsets = feature_offsets.size();
 
     std::vector<feature_t> features;
     features.assign(_feature_table.size(), {});
     for (const auto &item : feature_id_map.t_to_id) {
       const int pos_id = std::get<1>(item.first);
       const int feature_id = std::get<0>(item.first);
-      if ((pos_id < 0) || (pos_id >= pos_offsets.size())) {
+      if (pos_id < 0) {
         ERROR_AND_RETURN("Invalid pos_id: " << pos_id);
+      } else if (pos_id >= pos_offsets.size()) {
+        ERROR_AND_RETURN("pos_id out-of-range: " << feature_id << ", sz " << pos_offsets.size());
       }
-      if ((feature_id < 0) || (feature_id >= feature_offsets.size())) {
+
+      if (feature_id < 0) {
         ERROR_AND_RETURN("Invalid feature_id: " << feature_id);
+      } else if (feature_id >= int(num_feature_offsets)) {
+        ERROR_AND_RETURN("feature_id out-of-range: " << feature_id << ", sz " << num_feature_offsets);
       }
+
       feature_t &wf = features[size_t(item.second)];
       wf.id = feature_id;
 
