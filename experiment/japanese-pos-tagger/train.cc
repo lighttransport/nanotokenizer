@@ -1,4 +1,5 @@
-﻿#include <cstdio>
+﻿// NOTE: Encoding of this file is UTF-8 with BOM
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <unordered_map>
