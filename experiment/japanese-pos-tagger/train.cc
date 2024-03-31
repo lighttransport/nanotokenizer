@@ -219,10 +219,9 @@ static const char *kPOSDigit =
 
 static const char *kPOSUnknown =
     "\x09\xE5\x90\x8D\xE8\xA9\x9E\x2C\xE6\x99\xAE\xE9\x80\x9A\xE5\x90\x8D\xE8"
-    "\xA  9\x9E\x2C\x2A\x2C\x2A";
+    "\xA9\x9E\x2C\x2A\x2C\x2A";
 static const char *kPOSSymbol =
-    "\x09\xE7\x89\xB9\xE6\xAE\x8A\x2C\xE8\xA8\x98\xE5\x8F\xB7\x2C\x2A\x2C\x2A "
-    " ";
+    "\x09\xE7\x89\xB9\xE6\xAE\x8A\x2C\xE8\xA8\x98\xE5\x8F\xB7\x2C\x2A\x2C\x2A";
 
 // digit/alpha/katanaka
 const std::string kDigit =
@@ -639,8 +638,8 @@ class Trainer {
     // key: feature_id, value: counts
     std::map<int, int> feature_counts;
 
-    // key: pos_id, value: counts
-    std::map<int, int> pos_counts;
+    // Init index 0 with -1
+    std::vector<int> unknown_pos_counts(1, -1);
 
     // key: pattern_id, value = (key: POS_id, value = feature_id)
     std::map<int, std::map<int, int>> pattern_to_pos_and_feature_map;
@@ -692,13 +691,15 @@ class Trainer {
       max_word_length = (std::max)(surface.size(), max_word_length);
 
       // POS fields.
-      // e.g. 動詞,*,母音動詞,語幹
-      const std::string pos = join(fields, 1, _num_pos_fields + 1, ',', '"');
+      // POS starts with '\t'
+      // e.g. \t動詞,*,母音動詞,語幹
+      const std::string pos = "\t" + join(fields, 1, _num_pos_fields + 1, ',', '"');
 
       // full feature string.
+      // POS starts with '\t'
       // e.g.
-      // 動詞,*,母音動詞,語幹,い置付ける,いちづけ,代表表記:位置付ける/いちづける
-      const std::string feature = join(fields, 1, fields.size(), ',', '"');
+      // \t動詞,*,母音動詞,語幹,い置付ける,いちづけ,代表表記:位置付ける/いちづける
+      const std::string feature = "\t" + join(fields, 1, fields.size(), ',', '"');
 
       // add pos and feature
       _pos_table.put(pos);
@@ -746,6 +747,8 @@ class Trainer {
         ERROR_AND_RETURN("Too many words.");
       }
     }
+
+    unknown_pos_counts.resize(_pos_table.size(), 0);
 
     // std::vector<token_and_pos_tag> tokens;
     std::vector<std::pair<std::string, std::string>>
@@ -861,7 +864,13 @@ class Trainer {
           if ((tok_id >= num_seed_patterns) &&
               (classify_char_kind(token, chars_table) !=
                CharKind::KIND_DIGIT)) {
-            pos_counts[pos_id]++;
+
+            unknown_pos_counts.resize(_pos_table.size(), 0);
+            if (pos_id >= unknown_pos_counts.size()) {
+              ERROR_AND_RETURN("Internal error. pos_id " << pos_id << " is out-of-range. unknown_pos_counts.size = " << unknown_pos_counts.size());
+            }
+            unknown_pos_counts[pos_id]++;
+
             int pi{-1};
             if (!pattern_table.put({"", prev_pos_id}, pi)) {
               ERROR_AND_RETURN("Failed to add pattern: {\"\", " << prev_pos_id
@@ -892,7 +901,8 @@ class Trainer {
           ERROR_AND_RETURN("Invalid POS Tagged line:" << line);
         }
 
-        token_and_features.push_back({tup[0], tup[1]});
+        // prepend '\t' for surface
+        token_and_features.push_back({tup[0], "\t" + tup[1]});
         sentence += tup[0];
       }
     }
@@ -918,10 +928,7 @@ class Trainer {
         _counters[kMaxCodePoint + 1 + item.second] = {0, id};
       }
 
-      size_t max_pos_id{0};
-      for (const auto &item : _pos_table.t_to_id) {
-        max_pos_id = (std::max)(size_t(item.second), max_pos_id);
-      }
+      int max_pos_id = std::max_element(unknown_pos_counts.begin(), unknown_pos_counts.end()) - unknown_pos_counts.begin();
 
       for (const auto &item : pattern_table.t_to_id) {
         const std::pair<std::string, int> &pattern = item.first; // <pattern_str, prev_pos_id>
@@ -943,7 +950,7 @@ class Trainer {
 
             // Find the lowest count
             for (const auto &ps : ps_map) {
-              if (_counters[ps.first] >= _counters[pos_id]) {
+              if (unknown_pos_counts[ps.first] >= unknown_pos_counts[pos_id]) {
                 pos_id = ps.first;
               }
             }
@@ -1049,6 +1056,7 @@ class Trainer {
         } else {
           // surface only(BOS) pattern
           int pattern_id = int(_patterns.size());
+          DCOUT("surface-only pattern" << pattern_str);
           if (!pattern_trie.update(pattern_str.c_str(), pattern_str.size(), pattern_id)) {
             ERROR_AND_RETURN("Internal error: Patten Trie update failed.");
           }
@@ -1086,6 +1094,7 @@ class Trainer {
       if (it.prev_pos_id < 0) {
         line += "\t";
       } else {
+        // NOTE: '\t' is included in pos_str
         std::string pos_str;
         if (!_pos_table.get(it.prev_pos_id, pos_str)) {
           ERROR_AND_RETURN("Unknown POS string id: " << it.prev_pos_id);
@@ -1098,7 +1107,7 @@ class Trainer {
         ERROR_AND_RETURN("Unknown feature string id: " << it.feature_id);
       }
       line += "\t" + std::to_string(static_cast<int>(it.char_kind));
-      // TODO: add '\t' separator?
+      // NOTE: '\t' is included in feature_str
       line += feature_str; // feature_str includes '\n'
 
       ofs << line;
@@ -1325,7 +1334,7 @@ int main(int argc, char **argv) {
       }
 
       const std::string &field = csv.values[row * csv.num_fields + col];
-      if (field.find(",")) {
+      if (field.find(",") != std::string::npos) {
         line += "\"" + field + "\"";
       } else {
         line += field;
@@ -1345,6 +1354,10 @@ int main(int argc, char **argv) {
       pos_tagged_lines.push_back(s + "\n");
     }
   }
+
+  DCOUT("kPOSDigit: " << kPOSDigit);
+  DCOUT("kPOSUnknown: " << kPOSUnknown);
+  DCOUT("kPOSSymbol: " << kPOSSymbol);
 
   Trainer trainer(',', num_pos_fields);
 
