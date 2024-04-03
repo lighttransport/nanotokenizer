@@ -1,3 +1,4 @@
+﻿// NOTE: Encoding of this file is UTF-8 with BOM
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -210,6 +211,7 @@ struct pattern_t {
   int32_t feature_id{-1};
 };
 
+// clang-format off
 static const char *kPOSDigit =
     "\x09\xE5\x90\x8D\xE8\xA9\x9E\x2C\xE6\x95\xB0\xE8\xA9\x9E\x2C\x2A\x2C\x2A";
 
@@ -220,19 +222,11 @@ static const char *kPOSSymbol =
     "\x09\xE7\x89\xB9\xE6\xAE\x8A\x2C\xE8\xA8\x98\xE5\x8F\xB7\x2C\x2A\x2C\x2A";
 
 // digit/alpha/katanaka
-const std::string kDigit =
-    u8"0123456789０１２３４５６７８９〇一二三四五六七八九十百千万億兆京数・";
-const std::string kAlphabet =
-    u8"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZａｂｃｄｅｆｇｈｉｊ"
-    u8"ｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚＡＢＣＤＥＦＧＨＩＪ"
-    u8"ＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ＠：／．";
-const std::string kKatakana =
-    u8"ァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツ"
-    u8"ヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤ  "
-    u8"ュユョヨラリルレロヮワヰヱヲンヴヵヶヷヸヹヺーヽヾヿァアィイゥウェエォオ"
-    u8"カガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツヅテデトドナニヌネノ"
-    u8"ハバパヒビピフブプヘベペホボポマミムメモャヤュユョヨラリルレロヮワヰヱヲ"
-    u8"ンヴヵヶヷヸヹヺーヽヾヿ";
+const std::string kDigit = u8"0123456789０１２３４５６７８９〇一二三四五六七八九十百千万億兆京数・";
+const std::string kKatakana = u8"ァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤュユョヨラリルレロヮワヰヱヲンヴヵヶヷヸヹヺーヽヾヿ";
+const std::string kAlphabet = u8"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ＠：／．";
+
+// clang-format on
 
 constexpr uint32_t kMaxCodePoint = 0x10ffff;
 
@@ -833,13 +827,13 @@ class Trainer {
             }
 
             int pattern_id{-1};
-            if (!pattern_table.put({fragment, prev_pos_len}, pattern_id)) {
+            if (!pattern_table.put({fragment, int(prev_pos_len)}, pattern_id)) {
               ERROR_AND_RETURN("Failed to add pattern: {"
                                << fragment << ", " << prev_pos_len << "}");
             }
 
-            pattern_to_shift_feature_counts[fragment_id][{shift, feature_id}]++;
-            pattern_to_shift_feature_counts[pattern_id][{shift, feature_id}]++;
+            pattern_to_shift_feature_counts[fragment_id][{int(shift), feature_id}]++;
+            pattern_to_shift_feature_counts[pattern_id][{int(shift), feature_id}]++;
 
             if (!fragment_exists) {  // new pattern
               break;
