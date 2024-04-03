@@ -23,22 +23,20 @@
     return false;                                        \
   } while (0)
 
-#define DCOUT(s)                              \
-  do {                                                   \
-    std::ostringstream ss_e;                             \
+#define DCOUT(s)                                  \
+  do {                                            \
+    std::ostringstream ss_e;                      \
     ss_e << __func__ << "():" << __LINE__ << " "; \
-    ss_e << s << "\n";                                   \
-    std::cout << ss_e.str();                             \
+    ss_e << s << "\n";                            \
+    std::cout << ss_e.str();                      \
   } while (0)
 
 //
 // Simple Naiive Implementation of Trie tree.
 //
-template<typename KeyType, typename ValueType>
-class NaiiveTrie
-{
+template <typename KeyType, typename ValueType>
+class NaiiveTrie {
  public:
-
   enum class TraverseResult {
     Success = 0,
     FailAtLeaf = -1,
@@ -46,8 +44,7 @@ class NaiiveTrie
     InvalidArg = -3,
   };
 
-  struct NaiiveTrieNode
-  {
+  struct NaiiveTrieNode {
     std::map<KeyType, NaiiveTrieNode> children;
     bool has_value{false};
     ValueType value{};
@@ -55,10 +52,11 @@ class NaiiveTrie
 
   struct TraverseNode {
     const NaiiveTrieNode *node{nullptr};
-    int depth{0}; // corresponding Trie tree depth(0 = root)
+    int depth{0};  // corresponding Trie tree depth(0 = root)
   };
 
-  bool update(const KeyType *key, const size_t key_len, const ValueType &value) {
+  bool update(const KeyType *key, const size_t key_len,
+              const ValueType &value) {
     if (!key) {
       return false;
     }
@@ -91,17 +89,22 @@ class NaiiveTrie
   ///
   /// @param[in] key Key
   /// @param[in] key_len Key length
-  /// @param[out] value_out Value of corresponding key(When TraverseResult::Succes)
+  /// @param[out] value_out Value of corresponding key(When
+  /// TraverseResult::Succes)
   /// @param[out] last_traversed_node Lastly traversed node.
-  /// @param[in] from_node Traverse Trie trie from given node. nullptr = Traverse from root
+  /// @param[in] from_node Traverse Trie trie from given node. nullptr =
+  /// Traverse from root
   ///
   /// Return TraverseResult code.
   ///
-  /// NOTE: the pointer address of `last_traversed_node`  would change when `update` is called subsequently.
-  /// Thus the app should not reuse the pointer address when the code is calling `traverse() -> update() -> traverse()`.
+  /// NOTE: the pointer address of `last_traversed_node`  would change when
+  /// `update` is called subsequently. Thus the app should not reuse the pointer
+  /// address when the code is calling `traverse() -> update() -> traverse()`.
   ///
-  TraverseResult traverse(const KeyType *key, const size_t key_len, ValueType &value_out, TraverseNode &last_traversed_node, const TraverseNode *from_node = nullptr) {
-
+  TraverseResult traverse(const KeyType *key, const size_t key_len,
+                          ValueType &value_out,
+                          TraverseNode &last_traversed_node,
+                          const TraverseNode *from_node = nullptr) {
     if (!key) {
       return TraverseResult::InvalidArg;
     }
@@ -110,7 +113,8 @@ class NaiiveTrie
       return TraverseResult::InvalidArg;
     }
 
-    const NaiiveTrieNode *node = (from_node && from_node->node) ? from_node->node : &_root;
+    const NaiiveTrieNode *node =
+        (from_node && from_node->node) ? from_node->node : &_root;
     size_t depth = from_node ? from_node->depth : 0;
 
     if (depth >= key_len) {
@@ -121,7 +125,6 @@ class NaiiveTrie
     last_traversed_node.depth = depth;
 
     for (size_t i = depth; i < key_len; i++) {
-
       const KeyType token = key[i];
       if (!node->children.count(token)) {
         return TraverseResult::FailAtIntermediate;
@@ -138,12 +141,10 @@ class NaiiveTrie
     }
 
     return TraverseResult::FailAtLeaf;
-
-
   }
 
-
-  bool exactMatch(const KeyType *key, const size_t key_len, ValueType &value_out) {
+  bool exactMatch(const KeyType *key, const size_t key_len,
+                  ValueType &value_out) {
     if (!key) {
       return false;
     }
@@ -155,13 +156,11 @@ class NaiiveTrie
     NaiiveTrieNode *node = &_root;
 
     for (size_t i = 0; i < key_len; i++) {
-
       const KeyType token = key[i];
       if (!node->children.count(token)) {
         return false;
       }
       node = &node->children[token];
-
     }
 
     if (node->has_value) {
@@ -175,7 +174,6 @@ class NaiiveTrie
   // TODO: erase()
 
   size_t num_nodes_rec(const NaiiveTrieNode &node) {
-
     size_t n = node.children.size();
     for (const auto &child : node.children) {
       n += num_nodes_rec(child.second);
@@ -185,12 +183,10 @@ class NaiiveTrie
   }
 
   size_t num_nodes() {
-
     size_t n = num_nodes_rec(_root);
 
     return n;
   }
-
 
  private:
   NaiiveTrieNode _root;
@@ -210,7 +206,7 @@ struct pattern_t {
   int prev_pos_id{-1};
   int count{0};
   int32_t shift{0};
-  int32_t char_kind{0}; // we can use uint8
+  int32_t char_kind{0};  // we can use uint8
   int32_t feature_id{-1};
 };
 
@@ -607,6 +603,7 @@ struct token_and_pos_tag {
   int feature_id{-1};
 };
 
+// Extract first `num_pos_fields` fields and make it POS fields.
 bool extract_pos(const std::string &feature, std::string &pos,
                  int num_pos_fields = 4, char delimiter = ',') {
   std::vector<std::string> fields =
@@ -623,10 +620,13 @@ bool extract_pos(const std::string &feature, std::string &pos,
 
 class Trainer {
  public:
-  Trainer(const char delimiter, const uint32_t num_pos_fields = 4)
-      : _delimiter(delimiter), _num_pos_fields(num_pos_fields) {}
+  Trainer(const char delimiter, const uint32_t num_skip_fields = 4,
+          const uint32_t num_pos_fields = 4)
+      : _delimiter(delimiter),
+        _num_skip_fields(num_skip_fields),
+        _num_pos_fields(num_pos_fields) {}
 
-  bool train(const std::vector<std::string> &lines,
+  bool train(const std::vector<std::string> &dict_lines,
              const std::vector<std::string> &pos_tagged_lines) {
     std::map<std::string, int> chars_table;
     StrIdMap token_table;
@@ -672,16 +672,17 @@ class Trainer {
       }
     }
 
-    for (const auto &it : lines) {
+    for (const auto &it : dict_lines) {
       std::vector<std::string> fields =
           parse_line(it.c_str(), it.size(), _delimiter);
 
       // at lest num_pos_fields + 1 fields must exist.
-      if (fields.size() < _num_pos_fields + 1) {
+      if (fields.size() < _num_pos_fields) {
         ERROR_AND_RETURN("Insufficient fields in line: " << it);
       }
 
       const std::string &surface = fields[0];
+      DCOUT("surface " << surface);
 
       int pattern_id;
       if (!pattern_table.put({surface, -1}, pattern_id)) {
@@ -693,13 +694,17 @@ class Trainer {
       // POS fields.
       // POS starts with '\t'
       // e.g. \t動詞,*,母音動詞,語幹
-      const std::string pos = "\t" + join(fields, 1, _num_pos_fields + 1, ',', '"');
+      const std::string pos =
+          "\t" + join(fields, 1, _num_pos_fields + 1, ',', '"');
+
+      DCOUT("pos: " << pos);
 
       // full feature string.
       // POS starts with '\t'
       // e.g.
       // \t動詞,*,母音動詞,語幹,い置付ける,いちづけ,代表表記:位置付ける/いちづける
-      const std::string feature = "\t" + join(fields, 1, fields.size(), ',', '"');
+      const std::string feature =
+          "\t" + join(fields, 1, fields.size(), ',', '"');
 
       // add pos and feature
       _pos_table.put(pos);
@@ -864,10 +869,12 @@ class Trainer {
           if ((tok_id >= num_seed_patterns) &&
               (classify_char_kind(token, chars_table) !=
                CharKind::KIND_DIGIT)) {
-
             unknown_pos_counts.resize(_pos_table.size(), 0);
             if (pos_id >= unknown_pos_counts.size()) {
-              ERROR_AND_RETURN("Internal error. pos_id " << pos_id << " is out-of-range. unknown_pos_counts.size = " << unknown_pos_counts.size());
+              ERROR_AND_RETURN("Internal error. pos_id "
+                               << pos_id
+                               << " is out-of-range. unknown_pos_counts.size = "
+                               << unknown_pos_counts.size());
             }
             unknown_pos_counts[pos_id]++;
 
@@ -928,10 +935,13 @@ class Trainer {
         _counters[kMaxCodePoint + 1 + item.second] = {0, id};
       }
 
-      int max_pos_id = std::max_element(unknown_pos_counts.begin(), unknown_pos_counts.end()) - unknown_pos_counts.begin();
+      int max_pos_id = std::max_element(unknown_pos_counts.begin(),
+                                        unknown_pos_counts.end()) -
+                       unknown_pos_counts.begin();
 
       for (const auto &item : pattern_table.t_to_id) {
-        const std::pair<std::string, int> &pattern = item.first; // <pattern_str, prev_pos_id>
+        const std::pair<std::string, int> &pattern =
+            item.first;  // <pattern_str, prev_pos_id>
         const std::string &pattern_str = pattern.first;
 
         int prev_pos_id = pattern.second;
@@ -969,7 +979,8 @@ class Trainer {
               ERROR_AND_RETURN("POS str not found for id: " << max_pos_id);
             }
 
-            std::string feature = pos_str + "," + pattern_str + "," + pattern_str + ",*\n";
+            std::string feature =
+                pos_str + "," + pattern_str + "," + pattern_str + ",*\n";
             if (!_feature_table.put(feature, feature_id)) {
               ERROR_AND_RETURN("Too many features.");
             }
@@ -993,7 +1004,10 @@ class Trainer {
             shift_counts[_shift] += item.second;
           }
 
-          shift = -std::distance(shift_counts.rend(),  std::max_element(shift_counts.rbegin(), shift_counts.rend())) - 1;
+          shift = -std::distance(shift_counts.rend(),
+                                 std::max_element(shift_counts.rbegin(),
+                                                  shift_counts.rend())) -
+                  1;
 
           for (const auto &item : m) {
             if ((std::get<0>(item.first) == shift) && (item.second > count)) {
@@ -1004,7 +1018,7 @@ class Trainer {
 
           // Traverse Trie for each single char.
           NaiiveTrie<char, int>::TraverseNode from_node;
-          from_node.node = nullptr; // = root
+          from_node.node = nullptr;  // = root
           int pattern_id{-1};
 
           for (size_t key_pos = 0; key_pos < pattern_str.size(); key_pos++) {
@@ -1017,13 +1031,19 @@ class Trainer {
             //
             // traverse [key_pos, key_pos+1) Trie node.
             //
-            auto trav_result = pattern_trie.traverse(pattern_str.c_str(), key_len, /* out */value, /* out */traversed_node, &from_node);
-            if (trav_result == NaiiveTrie<char, int>::TraverseResult::InvalidArg) {
+            auto trav_result = pattern_trie.traverse(
+                pattern_str.c_str(), key_len, /* out */ value,
+                /* out */ traversed_node, &from_node);
+            if (trav_result ==
+                NaiiveTrie<char, int>::TraverseResult::InvalidArg) {
               ERROR_AND_RETURN("Invalid call of NaiiveTrie::traverse().");
-            } else if (trav_result == NaiiveTrie<char, int>::TraverseResult::FailAtLeaf) {
+            } else if (trav_result ==
+                       NaiiveTrie<char, int>::TraverseResult::FailAtLeaf) {
               from_node.node = traversed_node.node;
               continue;
-            } else if (trav_result == NaiiveTrie<char, int>::TraverseResult::FailAtIntermediate) {
+            } else if (trav_result ==
+                       NaiiveTrie<char,
+                                  int>::TraverseResult::FailAtIntermediate) {
               break;
             } else {
               // Success
@@ -1037,11 +1057,10 @@ class Trainer {
               continue;
             }
           }
-
         }
 
         // Count each character of pattern string.
-        for (size_t s = 0; s < pattern_str.size(); ) {
+        for (size_t s = 0; s < pattern_str.size();) {
           uint32_t char_len{0};
           uint32_t cp = to_codepoint(&pattern_str[s], char_len);
           if ((cp == ~0) || (char_len == 0)) {
@@ -1057,7 +1076,8 @@ class Trainer {
           // surface only(BOS) pattern
           int pattern_id = int(_patterns.size());
           DCOUT("surface-only pattern" << pattern_str);
-          if (!pattern_trie.update(pattern_str.c_str(), pattern_str.size(), pattern_id)) {
+          if (!pattern_trie.update(pattern_str.c_str(), pattern_str.size(),
+                                   pattern_id)) {
             ERROR_AND_RETURN("Internal error: Patten Trie update failed.");
           }
         }
@@ -1076,7 +1096,6 @@ class Trainer {
         pt.shift = shift;
         pt.feature_id = feature_id;
         _patterns.emplace_back(pt);
-
       }
     }
 
@@ -1084,7 +1103,6 @@ class Trainer {
   }
 
   bool save_patterns(std::ofstream &ofs) {
-
     for (const auto &it : _patterns) {
       // separator: \t
       // count, surface, prev_pos, shift, char_kind, feature
@@ -1108,7 +1126,7 @@ class Trainer {
       }
       line += "\t" + std::to_string(static_cast<int>(it.char_kind));
       // NOTE: '\t' is included in feature_str
-      line += feature_str; // feature_str includes '\n'
+      line += feature_str;  // feature_str includes '\n'
 
       ofs << line;
     }
@@ -1138,15 +1156,16 @@ class Trainer {
       }
     }
 
-    { // patterns file
+    {  // patterns file
       // Sort patterns based on count, then string(lexicologically)
-      std::sort(_patterns.rbegin(), _patterns.rend(), [](const pattern_t &a, const pattern_t &b) {
-        if (a.count == b.count) {
-          return a.surface <  b.surface;
-        } else {
-          return a.count < b.count;
-        }
-      });
+      std::sort(_patterns.rbegin(), _patterns.rend(),
+                [](const pattern_t &a, const pattern_t &b) {
+                  if (a.count == b.count) {
+                    return a.surface < b.surface;
+                  } else {
+                    return a.count < b.count;
+                  }
+                });
 
       std::ofstream ofs(base_filename);
       if (!ofs) {
@@ -1154,10 +1173,10 @@ class Trainer {
       }
 
       if (!save_patterns(ofs)) {
-        ERROR_AND_RETURN("Failed to save `patterns` to file: " << base_filename);
+        ERROR_AND_RETURN(
+            "Failed to save `patterns` to file: " << base_filename);
       }
     }
-
 
     {
       size_t sz = char_to_id.size() * sizeof(int32_t);
@@ -1217,7 +1236,7 @@ class Trainer {
       feature_str_lens[item.second] = item.first.size();
       feature_str_buf += item.first;
     }
-    //DCOUT("feature_offsets.size = " << feature_offsets.size());
+    // DCOUT("feature_offsets.size = " << feature_offsets.size());
     size_t num_feature_offsets = feature_offsets.size();
 
     std::vector<feature_t> features;
@@ -1228,13 +1247,15 @@ class Trainer {
       if (pos_id < 0) {
         ERROR_AND_RETURN("Invalid pos_id: " << pos_id);
       } else if (pos_id >= pos_offsets.size()) {
-        ERROR_AND_RETURN("pos_id out-of-range: " << feature_id << ", sz " << pos_offsets.size());
+        ERROR_AND_RETURN("pos_id out-of-range: " << feature_id << ", sz "
+                                                 << pos_offsets.size());
       }
 
       if (feature_id < 0) {
         ERROR_AND_RETURN("Invalid feature_id: " << feature_id);
       } else if (feature_id >= int(num_feature_offsets)) {
-        ERROR_AND_RETURN("feature_id out-of-range: " << feature_id << ", sz " << num_feature_offsets);
+        ERROR_AND_RETURN("feature_id out-of-range: " << feature_id << ", sz "
+                                                     << num_feature_offsets);
       }
 
       feature_t &wf = features[size_t(item.second)];
@@ -1277,8 +1298,17 @@ class Trainer {
   StrIdMap _pos_table;
   StrIdMap _feature_table;
   char _delimiter{','};
-  int _num_pos_fields{4};
 
+  //
+  // Mecab dict style.
+  // surface,id1,id2,cost,pos1,pos2,pos3,pos4,extra1,extra2,extra3,...
+  //                   ^^^^^^^^^^^^^^^^^^^^
+  //                    num_skip_fieds=4
+  //                                        ^^^^^^^^^^^^^^^^^^^
+  //                                        num_pos_fields=4
+  //
+  int _num_skip_fields{4};  // How many fields to skip to get POS fields,
+  int _num_pos_fields{4};   // # of fields for POS.
 
   std::vector<pattern_t> _patterns;
 
@@ -1288,8 +1318,8 @@ class Trainer {
 
 int main(int argc, char **argv) {
   if (argc < 4) {
-    std::cout
-        << "Need input.vocab(csv) train.txt(POS tagged) output_basename [num_pos_fields]\n";
+    std::cout << "Need input.vocab(csv) train.txt(POS tagged) output_basename "
+                 "[num_pos_fields]\n";
     exit(-1);
   }
 
