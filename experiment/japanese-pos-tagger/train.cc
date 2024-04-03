@@ -1,4 +1,4 @@
-﻿// NOTE: Encoding of this file is UTF-8 with BOM
+// NOTE: Encoding of this file is UTF-8 with BOM
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -670,9 +670,9 @@ class Trainer {
       std::vector<std::string> fields =
           parse_line(it.c_str(), it.size(), _delimiter);
 
-      // at lest num_pos_fields + 1 fields must exist.
-      if (fields.size() < _num_pos_fields) {
-        ERROR_AND_RETURN("Insufficient fields in line: " << it);
+      // at lest `num_skip_fields + num_pos_fields` fields must exist.
+      if (fields.size() < (_num_skip_fields + _num_pos_fields)) {
+        ERROR_AND_RETURN("Insufficient number of fields in line. expected " << (_num_skip_fields + _num_pos_fields) << " but got " << fields.size() << " : " << it);
       }
 
       const std::string &surface = fields[0];
@@ -689,7 +689,7 @@ class Trainer {
       // POS starts with '\t'
       // e.g. \t動詞,*,母音動詞,語幹
       const std::string pos =
-          "\t" + join(fields, 1, _num_pos_fields + 1, ',', '"');
+          "\t" + join(fields, _num_skip_fields, _num_skip_fields + _num_pos_fields, ',', '"');
 
       DCOUT("pos: " << pos);
 
@@ -698,7 +698,7 @@ class Trainer {
       // e.g.
       // \t動詞,*,母音動詞,語幹,い置付ける,いちづけ,代表表記:位置付ける/いちづける
       const std::string feature =
-          "\t" + join(fields, 1, fields.size(), ',', '"');
+          "\t" + join(fields, _num_skip_fields, fields.size(), ',', '"');
 
       // add pos and feature
       _pos_table.put(pos);
