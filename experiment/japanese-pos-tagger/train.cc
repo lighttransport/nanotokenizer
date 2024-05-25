@@ -507,6 +507,7 @@ inline std::string join(const std::vector<std::string> &strs,
       dst += delimiter;
     }
     if (strs[i].find(delimiter) != std::string::npos) {
+      DCOUT("quote: " << strs[i]);
       dst += quote + strs[i] + quote;
     } else {
       dst += strs[i];
@@ -530,6 +531,7 @@ inline std::vector<std::string> parse_line(const char *p, const size_t len,
 
   size_t quote_size = utf8_len(quote_char[0]);
 
+  bool quoted = false;
   bool in_quoted_string = false;
   size_t s_start = 0;
 
@@ -545,6 +547,9 @@ inline std::vector<std::string> parse_line(const char *p, const size_t len,
     if ((i + quote_size) < len) {
       if (memcmp(curr_p, quote_char, quote_size) == 0) {
         in_quoted_string = !in_quoted_string;
+        if (in_quoted_string) {
+          quoted = true;
+        }
         continue;
       }
     }
@@ -553,7 +558,14 @@ inline std::vector<std::string> parse_line(const char *p, const size_t len,
       // std::cout << "s_start = " << s_start << ", (i-1) = " << i-1 << "\n";
       // std::cout << "p[i] = " << p[i] << "\n";
       if (s_start < i) {
-        std::string tok(p + s_start, i - s_start);
+        std::string tok;
+        if (quoted) {
+          // strip quote character
+          tok = std::string(p + s_start + quote_size, i - s_start - quote_size);
+          DCOUT("quoted: " << tok);
+        } else {
+          tok = std::string(p + s_start, i - s_start);
+        }
 
         tokens.push_back(tok);
       } else {
@@ -692,13 +704,15 @@ class Trainer {
       max_word_length = (std::max)(surface.size(), max_word_length);
 
       // POS fields.
-      // e.g. 動詞,*,母音動詞,語幹
-      const std::string pos = join(fields, 1, _num_pos_fields + 1, ',', '"');
+      // POS starts with '\t'
+      // e.g. \t動詞,*,母音動詞,語幹
+      const std::string pos = "\t" + join(fields, 1, _num_pos_fields + 1, ',', '"');
 
       // full feature string.
+      // It also starts with '\t'
       // e.g.
-      // 動詞,*,母音動詞,語幹,い置付ける,いちづけ,代表表記:位置付ける/いちづける
-      const std::string feature = join(fields, 1, fields.size(), ',', '"');
+      // \t動詞,*,母音動詞,語幹,い置付ける,いちづけ,代表表記:位置付ける/いちづける
+      const std::string feature = "\t" + join(fields, 1, fields.size(), ',', '"');
 
       // add pos and feature
       _pos_table.put(pos);
@@ -892,7 +906,8 @@ class Trainer {
           ERROR_AND_RETURN("Invalid POS Tagged line:" << line);
         }
 
-        token_and_features.push_back({tup[0], tup[1]});
+        // Prepend "\t" to feature.
+        token_and_features.push_back({tup[0], "\t" + tup[1]});
         sentence += tup[0];
       }
     }
@@ -1090,6 +1105,7 @@ class Trainer {
         if (!_pos_table.get(it.prev_pos_id, pos_str)) {
           ERROR_AND_RETURN("Unknown POS string id: " << it.prev_pos_id);
         }
+        // NOTE: pos_str starts with '\t', so no additon of separator '\t'
         line += pos_str;
       }
       line += "\t" + std::to_string(it.shift);
@@ -1098,7 +1114,7 @@ class Trainer {
         ERROR_AND_RETURN("Unknown feature string id: " << it.feature_id);
       }
       line += "\t" + std::to_string(static_cast<int>(it.char_kind));
-      // TODO: add '\t' separator?
+      // NOTE: feature_str starts with '\t', so no additon of separator '\t'
       line += feature_str; // feature_str includes '\n'
 
       ofs << line;
@@ -1325,7 +1341,7 @@ int main(int argc, char **argv) {
       }
 
       const std::string &field = csv.values[row * csv.num_fields + col];
-      if (field.find(",")) {
+      if (field.find(",") != std::string::npos) {
         line += "\"" + field + "\"";
       } else {
         line += field;
@@ -1333,6 +1349,9 @@ int main(int argc, char **argv) {
     }
 
     line += "\n";  // TODO: do not include newline.
+
+    DCOUT("line: " << line);
+
     lines.emplace_back(std::move(line));
   }
 
