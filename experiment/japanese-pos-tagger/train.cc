@@ -1,4 +1,15 @@
+// SPDX-License-Identifier: 3-Clause BSD.
+// Copyright 2024 - Present, Light Transport Entertainment, Inc.
+//
 // NOTE: Encoding of this file is UTF-8 with BOM
+//
+// Training code is based on
+// https://www.tkl.iis.u-tokyo.ac.jp/~ynaga/jagger/index.ja.html
+//
+// Jagger -- C++ implementation of Pattern-based Japanese Morphological Analyzer
+// Copyright (c) 2022 Naoki Yoshinaga <ynaga@iis.u-tokyo.ac.jp>
+//
+// We choose BSD license for it.
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -220,6 +231,7 @@ static const char *kPOSUnknown =
     "\xA9\x9E\x2C\x2A\x2C\x2A";
 static const char *kPOSSymbol =
     "\x09\xE7\x89\xB9\xE6\xAE\x8A\x2C\xE8\xA8\x98\xE5\x8F\xB7\x2C\x2A\x2C\x2A";
+static int kUC_SYMBOL_RANGE[][2] = { {0x0021, 0x002F}, {0x003A, 0x0040}, {0x005B, 0x0060}, {0x007B, 0x007E}, {0x00A1, 0x00BF}, {0x00D7, 0x00D7}, {0x00F7, 0x00F7}, {0x2000, 0x206F}, {0x20A0, 0x214F}, {0x2190, 0x2BFF}, {0x3000, 0x3004}, {0x3008, 0x303F}, {0x3200,   0x33FF}, {0xFE30, 0xFE4F}, {0xFE50, 0xFE6B}, {0xFF01, 0xFF0F}, {0xFF1A, 0xFF20}, {0xFF3B, 0xFF40}, {0xFF5B, 0xFF65}, {0xFFE0, 0xFFEF}, {0x10190, 0x1019C}, {0x1F000, 0x1FBFF}, {} }; // Symbol-like Unicode Blocks
 
 // digit/alpha/katanaka
 const std::string kDigit = u8"0123456789０１２３４５６７８９〇一二三四五六七八九十百千万億兆京数・";
@@ -496,7 +508,7 @@ inline std::string join(const std::vector<std::string> &strs,
       dst += delimiter;
     }
     if (strs[i].find(delimiter) != std::string::npos) {
-      DCOUT("quote: " << strs[i]);
+      //DCOUT("quote: " << strs[i]);
       dst += quote + strs[i] + quote;
     } else {
       dst += strs[i];
@@ -551,7 +563,7 @@ inline std::vector<std::string> parse_line(const char *p, const size_t len,
         if (quoted) {
           // strip quote character
           tok = std::string(p + s_start + quote_size, i - s_start - quote_size);
-          DCOUT("quoted: " << tok);
+          //DCOUT("quoted: " << tok);
         } else {
           tok = std::string(p + s_start, i - s_start);
         }
@@ -620,7 +632,7 @@ bool extract_pos(const std::string &feature, std::string &pos,
     return false;
   }
 
-  pos = join(fields, 0, num_pos_fields + 1, ',', '"');
+  pos = join(fields, 0, num_pos_fields, ',', '"');
   return true;
 }
 
@@ -684,11 +696,13 @@ class Trainer {
 
       // at lest `num_skip_fields + num_pos_fields` fields must exist.
       if (fields.size() < (_num_skip_fields + _num_pos_fields)) {
-        ERROR_AND_RETURN("Insufficient number of fields in line. expected " << (_num_skip_fields + _num_pos_fields) << " but got " << fields.size() << " : " << it);
+        ERROR_AND_RETURN("Insufficient number of fields in line. expected "
+                         << (_num_skip_fields + _num_pos_fields) << " but got "
+                         << fields.size() << " : " << it);
       }
 
       const std::string &surface = fields[0];
-      DCOUT("surface " << surface);
+      //DCOUT("surface " << surface);
 
       int pattern_id;
       if (!pattern_table.put({surface, -1}, pattern_id)) {
@@ -701,9 +715,10 @@ class Trainer {
       // POS starts with '\t'
       // e.g. \t動詞,*,母音動詞,語幹
       const std::string pos =
-          "\t" + join(fields, _num_skip_fields, _num_skip_fields + _num_pos_fields, ',', '"');
+          "\t" + join(fields, _num_skip_fields,
+                      _num_skip_fields + _num_pos_fields, ',', '"');
 
-      DCOUT("pos: " << pos);
+      //DCOUT("pos: " << pos);
 
       // full feature string.
       // POS starts with '\t'
@@ -727,6 +742,10 @@ class Trainer {
       }
 
       pattern_to_pos_and_feature_map[pattern_id][pos_id] = feature_id;
+      //DCOUT("ti " << pos_id << " = " << pos);
+      //DCOUT("fi " << feature_id << " = " << feature);
+      //DCOUT("si2ti2fi " << pattern_id << " = (" << pos_id << ", " << feature_id
+      //                  << ")");
     }
     size_t num_seed_patterns = pattern_table.size();
     std::cout << "# of seed patterns : " << num_seed_patterns << "\n";
@@ -756,6 +775,22 @@ class Trainer {
       chars_table[s] = int(CharKind::KIND_KATAKANA);
       if (!pattern_table.put({s, -1})) {
         ERROR_AND_RETURN("Too many words.");
+      }
+    }
+
+    for (int i = 0; kUC_SYMBOL_RANGE[i][0]; ++i) {
+      for (int j = kUC_SYMBOL_RANGE[i][0]; j <= kUC_SYMBOL_RANGE[i][1]; ++j) {
+        int k(j), b((j > 0xffff) + (j > 0x7ff) + (j > 0x7f));
+        char c[5] = {"\0\xc0\xe0\xf0"[b]};
+        for (c[0] |= k >> (6 * b); b; k >>= 6) {
+          c[b--] = 0x80 | (k & 0x3f);
+        }
+        // pbag.to_i (std::make_pair (&c[0], -1));
+
+        std::string s(c);
+        if (!pattern_table.put({s, -1})) {
+          ERROR_AND_RETURN("Too many words.");
+        }
       }
     }
 
@@ -789,31 +824,32 @@ class Trainer {
         // pattern_to_shift_feature_counts =
         //
         // [{'吾輩', -1} , feature_id, tokens[0].len]
-        // [{'吾輩', pos0_id}', feature_id, tokens[0].len]
+        // [{'吾輩', BOS}', feature_id, tokens[0].len]
         // [{'吾輩は', -1}, feature_id, tokens[0].len]
-        // [{'吾輩は', pos0_id}, feature_id, tokens[0].len]
+        // [{'吾輩は', BOS}, feature_id, tokens[0].len]
         // [{'吾輩は猫', -1}, feature_id, tokens[0].len]
-        // [{'吾輩は猫', pos0_id}, feature_id, tokens[0].len]
+        // [{'吾輩は猫', BOS}, feature_id, tokens[0].len]
         // [{'吾輩は猫で', -1}, feature_id, tokens[0].len]
-        // [{'吾輩は猫で', pos0_id}, feature_id, tokens[0].len]
+        // [{'吾輩は猫で', BOS}, feature_id, tokens[0].len]
         // [{'吾輩は猫であ', -1}, feature_id, tokens[0].len]
-        // [{'吾輩は猫であ' pos0_id}, feature_id, tokens[0].len]
+        // [{'吾輩は猫であ' BOS}, feature_id, tokens[0].len]
         // [{'吾輩は猫である', -1} feature_id, tokens[0].len]
-        // [{'吾輩は猫である', pos0_id}, feature_id, tokens[0].len]
+        // [{'吾輩は猫である', BOS}, feature_id, tokens[0].len]
         // [{'は', -1}, feature_id, tokens[1].len]
-        // [{'は', pos1_id}, feature_id, tokens[1].len]
+        // [{'は', prev_pos_id}, feature_id, tokens[1].len]
         // [{'は猫', -1}, feature_id, tokens[1].len]
-        // [{'は猫', pos1_id}, feature_id, tokens[1].len]
+        // [{'は猫', prev_pos_id}, feature_id, tokens[1].len]
         // [{'は猫で', -1}, feature_id, tokens[1].len]
-        // [{'は猫で', pos1_id}, feature_id, tokens[1].len]
+        // [{'は猫で', prev_pos_id}, feature_id, tokens[1].len]
         // [{'は猫であ', -1}, feature_id, tokens[1].len]
-        // [{'は猫であ' pos1_id}, feature_id, tokens[1].len]
+        // [{'は猫であ' prev_pos_id}, feature_id, tokens[1].len]
         // [{'は猫である', -1} feature_id, tokens[1].len]
-        // [{'は猫である', pos1_id}, feature_id, tokens[1].len]
+        // [{'は猫である', prev_pos_id}, feature_id, tokens[1].len]
         // ...
 
         size_t sent_loc{0};
         size_t prev_pos_len{0};
+
         int prev_pos_id{0};
         for (const auto &ts : token_and_features) {
           const std::string &token = ts.first;
@@ -829,7 +865,8 @@ class Trainer {
           for (size_t sent_len = shift;
                (sent_loc + sent_len <= sentence.size()) &&
                (sent_len <= max_word_length);) {
-            std::string fragment = sentence.substr(sent_loc, sent_len);
+            std::string fragment = sentence.substr(
+                sent_loc, sent_len);  // FIXME: rename to `token`
 
             bool fragment_exists = pattern_table.has({fragment, -1});
 
@@ -839,13 +876,30 @@ class Trainer {
             }
 
             int pattern_id{-1};
-            if (!pattern_table.put({fragment, int(prev_pos_len)}, pattern_id)) {
+            if (!pattern_table.put({fragment, int(prev_pos_id)}, pattern_id)) {
               ERROR_AND_RETURN("Failed to add pattern: {"
-                               << fragment << ", " << prev_pos_len << "}");
+                               << fragment << ", " << prev_pos_id << "}");
             }
 
-            pattern_to_shift_feature_counts[fragment_id][{int(shift), feature_id}]++;
-            pattern_to_shift_feature_counts[pattern_id][{int(shift), feature_id}]++;
+            //DCOUT("fragment_id " << fragment_id << " = (" << fragment
+            //                     << ", -1)");
+            //DCOUT("prev_pos " << prev_pos_id);
+
+            pattern_to_shift_feature_counts[fragment_id]
+                                           [{int(shift), feature_id}]++;
+            pattern_to_shift_feature_counts[pattern_id]
+                                           [{int(shift), feature_id}]++;
+            int f_cnt = pattern_to_shift_feature_counts[fragment_id][{
+                int(shift), feature_id}];
+            int p_cnt = pattern_to_shift_feature_counts[pattern_id][{
+                int(shift), feature_id}];
+
+            //DCOUT("fragment_id " << fragment_id << ": shift, feat, count "
+            //                     << int(shift) << ", " << feature_id << ", "
+            //                     << f_cnt);
+            //DCOUT("pattern_id " << pattern_id << ": shift, feat, count "
+            //                    << int(shift) << ", " << feature_id << ", "
+            //                    << p_cnt);
 
             if (!fragment_exists) {  // new pattern
               break;
@@ -869,6 +923,8 @@ class Trainer {
           if (!_pos_table.put(pos, pos_id)) {
             ERROR_AND_RETURN("Failed to add POS: {" << pos);
           }
+
+          //DCOUT("pos_id " << pos_id << " = " << pos);
 
           // token is only seen in training data
           // Add it also to vocabs
@@ -1081,7 +1137,7 @@ class Trainer {
         } else {
           // surface only(BOS) pattern
           int pattern_id = int(_patterns.size());
-          DCOUT("surface-only pattern" << pattern_str);
+          //DCOUT("surface-only pattern" << pattern_str);
           if (!pattern_trie.update(pattern_str.c_str(), pattern_str.size(),
                                    pattern_id)) {
             ERROR_AND_RETURN("Internal error: Patten Trie update failed.");
@@ -1103,6 +1159,8 @@ class Trainer {
         pt.feature_id = feature_id;
         _patterns.emplace_back(pt);
       }
+
+      DCOUT("# of patterns: " << _patterns.size());
     }
 
     return true;
@@ -1133,7 +1191,7 @@ class Trainer {
       }
       line += "\t" + std::to_string(static_cast<int>(it.char_kind));
       // NOTE: feature_str starts with '\t', so no additon of separator '\t'
-      line += feature_str; // feature_str includes '\n'
+      line += feature_str;  // feature_str includes '\n'
 
       ofs << line;
     }
@@ -1380,7 +1438,7 @@ int main(int argc, char **argv) {
 
     line += "\n";  // TODO: do not include newline.
 
-    DCOUT("line: " << line);
+    //DCOUT("line: " << line);
 
     lines.emplace_back(std::move(line));
   }
@@ -1395,9 +1453,9 @@ int main(int argc, char **argv) {
     }
   }
 
-  DCOUT("kPOSDigit: " << kPOSDigit);
-  DCOUT("kPOSUnknown: " << kPOSUnknown);
-  DCOUT("kPOSSymbol: " << kPOSSymbol);
+  //DCOUT("kPOSDigit: " << kPOSDigit);
+  //DCOUT("kPOSUnknown: " << kPOSUnknown);
+  //DCOUT("kPOSSymbol: " << kPOSSymbol);
 
   Trainer trainer(',', num_pos_fields);
 
