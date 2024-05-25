@@ -87,6 +87,7 @@ class NaiiveTrie {
 
       node = &node->children[token];
     }
+    DCOUT("add value " << value);
     node->has_value = true;
     node->value = value;
 
@@ -136,6 +137,7 @@ class NaiiveTrie {
     last_traversed_node.node = node;
     last_traversed_node.depth = depth;
 
+    DCOUT("depth " << depth);
     for (size_t i = depth; i < key_len; i++) {
       const KeyType token = key[i];
       if (!node->children.count(token)) {
@@ -976,6 +978,8 @@ class Trainer {
       }
     }
 
+    DCOUT("# of pattern candidates: " << pattern_table.size());
+
     // prune redundant patterns
     {
       NaiiveTrie<char, int> pattern_trie;
@@ -1027,6 +1031,7 @@ class Trainer {
               }
             }
             feature_id = ps_map.find(pos_id)->second;
+            DCOUT("ti " << pos_id << ", fi " << feature_id);
           } else if (classify_char_kind(pattern_str, chars_table) ==
                      CharKind::KIND_DIGIT) {
             std::string feature = std::string(kPOSDigit) + ",*,*,*\n";
@@ -1034,6 +1039,8 @@ class Trainer {
             if (!_feature_table.put(feature, feature_id)) {
               ERROR_AND_RETURN("Too many features.");
             }
+
+            DCOUT("digit add " << feature);
           } else if (classify_char_kind(pattern_str, chars_table) !=
                      CharKind::KIND_OTHER) {
             std::string pos_str;
@@ -1046,6 +1053,8 @@ class Trainer {
             if (!_feature_table.put(feature, feature_id)) {
               ERROR_AND_RETURN("Too many features.");
             }
+
+            DCOUT("other add " << feature);
           } else {
             std::string feature = std::string(kPOSSymbol) + ",*,*,*\n";
 
@@ -1085,6 +1094,7 @@ class Trainer {
 
           for (size_t key_pos = 0; key_pos < pattern_str.size(); key_pos++) {
             from_node.depth = key_pos;
+            DCOUT("key depth " << key_pos);
 
             NaiiveTrie<char, int>::TraverseNode traversed_node;
             int value;
@@ -1096,6 +1106,8 @@ class Trainer {
             auto trav_result = pattern_trie.traverse(
                 pattern_str.c_str(), key_len, /* out */ value,
                 /* out */ traversed_node, &from_node);
+
+            DCOUT("trav " << int(trav_result) << ", pat = " << pattern_str.c_str() << "key_len " << key_len);
             if (trav_result ==
                 NaiiveTrie<char, int>::TraverseResult::InvalidArg) {
               ERROR_AND_RETURN("Invalid call of NaiiveTrie::traverse().");
@@ -1110,15 +1122,21 @@ class Trainer {
             } else {
               // Success
               pattern_id = value;
+              DCOUT("got it n " << pattern_id);
+              // There may be subseqent pattern to be matched. So continue traversal from this node.
+              from_node.node = traversed_node.node;
             }
           }
 
           if (pattern_id > -1) {
             const pattern_t &pat = _patterns[size_t(pattern_id)];
             if ((shift == pat.shift) && (feature_id == pat.feature_id)) {
+              DCOUT("cont: shit " << shift << ", feat_id " << feature_id);
               continue;
             }
           }
+
+          DCOUT("trav failed. pat_id " << pattern_id);
         }
 
         // Count each character of pattern string.
@@ -1137,7 +1155,7 @@ class Trainer {
         } else {
           // surface only(BOS) pattern
           int pattern_id = int(_patterns.size());
-          //DCOUT("surface-only pattern" << pattern_str);
+          DCOUT("surface-only pattern " << pattern_str << ", id " << pattern_id);
           if (!pattern_trie.update(pattern_str.c_str(), pattern_str.size(),
                                    pattern_id)) {
             ERROR_AND_RETURN("Internal error: Patten Trie update failed.");
@@ -1157,6 +1175,7 @@ class Trainer {
         pt.count = count;
         pt.shift = shift;
         pt.feature_id = feature_id;
+        DCOUT("add pat " << pattern_str << ", prev_pos_id " << prev_pos_id << ", char_kind " << int(char_kind) << ", count " << count << ", shift " << shift << ", feat_id " << feature_id << ", sz " << _patterns.size());
         _patterns.emplace_back(pt);
       }
 
