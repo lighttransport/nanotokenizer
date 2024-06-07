@@ -1185,7 +1185,7 @@ class Trainer {
     return true;
   }
 
-  bool save_patterns(std::ofstream &ofs) {
+  bool save_patterns_ascii(std::ofstream &ofs) {
     for (const auto &it : _patterns) {
       // separator: \t
       // count, surface, prev_pos, shift, char_kind, feature
@@ -1214,6 +1214,30 @@ class Trainer {
 
       ofs << line;
     }
+
+    return true;
+  }
+
+  bool save_patterns_binary(std::vector<uint8_t> &dst) {
+    std::stringstream ss;
+    uint32_t num_patterns = _patterns.size();
+    ss.write(reinterpret_cast<const char *>(&num_patterns), sizeof(uint32_t));
+    for (const auto &it : _patterns) {
+      // count, surface, prev_pos_id, shift, char_kind, feature_id
+      // (uint32, string, int32, uint32, int32, int32)
+      ss.write(reinterpret_cast<const char *>(&it.count), sizeof(int));
+      uint32_t nchars = it.surface.size();
+      ss.write(reinterpret_cast<const char *>(&nchars), sizeof(uint32_t));
+      ss.write(reinterpret_cast<const char *>(it.surface.data()), nchars);
+      ss.write(reinterpret_cast<const char *>(&it.prev_pos_id), sizeof(int));
+      ss.write(reinterpret_cast<const char *>(&it.shift), sizeof(int));
+      ss.write(reinterpret_cast<const char *>(&it.char_kind), sizeof(int));
+      ss.write(reinterpret_cast<const char *>(&it.feature_id), sizeof(int));
+    }
+
+    std::string buf = ss.str();
+    dst.resize(buf.size());
+    memcpy(dst.data(), buf.c_str(), buf.size());
 
     return true;
   }
@@ -1256,7 +1280,7 @@ class Trainer {
         ERROR_AND_RETURN("Failed to open file for write: " << base_filename);
       }
 
-      if (!save_patterns(ofs)) {
+      if (!save_patterns_ascii(ofs)) {
         ERROR_AND_RETURN(
             "Failed to save `patterns` to file: " << base_filename);
       }
@@ -1368,11 +1392,45 @@ class Trainer {
       data_offset += sz;
     }
 
-    // TODO: Save Trie data
+    {
+      std::vector<uint8_t> patterns;
+      if (!save_patterns_binary(patterns)) {
+        ERROR_AND_RETURN("save_patterns failed.");
+      }
+
+      size_t sz = patterns.size();
+      st.storage.resize(data_offset + sz);
+      memcpy(st.storage.data() + data_offset, patterns.data(), sz);
+
+      safetensors::tensor_t tensor;
+      tensor.dtype = safetensors::dtype::kUINT8;
+      tensor.data_offsets[0] = data_offset;
+      tensor.data_offsets[1] = data_offset + sz;
+      tensor.shape.resize(1);
+      tensor.shape[0] = sz;
+      st.tensors.insert("patterns", tensor);
+
+      data_offset += sz;
+    }
+
+    // TODO: Save Trie data?
 
     {
       st.metadata.insert("creator", "nanotokenizer");
       st.metadata.insert("num_pos_fields", std::to_string(_num_pos_fields));
+    }
+
+    std::string st_filename = base_filename + ".safetensors";
+    std::string warn;
+    std::string err;
+    bool ret = safetensors::save_to_file(st, st_filename, &warn, &err);
+    if (warn.size()) {
+      std::cout << "[safetensors save] WARN: " << warn << "\n";
+    }
+
+    if (!ret) {
+      std::cerr << "[safetensors save] ERRROR: " << err << "\n";
+      return false;
     }
 
     return true;
