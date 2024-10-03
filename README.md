@@ -31,4 +31,4 @@ If you want to run tokenizer with no C++ exception(e.g. WASM), naiive or cedar v
 * rwkv_world_tokenizer : Apache 2.0 license https://github.com/mlc-ai/tokenizers-cpp
 * rwkv_vocab_v20230424.json : Not sure, but would be Apache 2.0 also. https://github.com/BlinkDL/ChatRWKV
 * cedar/ccedar_core.h : GPLv2, LGPLv2.1 or BSD license. https://www.tkl.iis.u-tokyo.ac.jp/~ynaga/cedar/
-
+* unordered_dense: MIT license https://github.com/martinus/unordered_dense
